@@ -1,0 +1,30 @@
+# Secrets / env: NEVER commit real keys
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Data / models (large, regenerated)
+data/*.db
+data/*.sqlite
+*.parquet
+models/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
