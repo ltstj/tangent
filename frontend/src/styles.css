@@ -7,12 +7,11 @@ body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 .wall-col { flex: 1; display: flex; flex-direction: column; gap: 10px; }
 .wall-col.up { animation: scrollUp 90s linear infinite; }
 .wall-col.down { animation: scrollDown 90s linear infinite; }
-.wall-col img { width: 100%; border-radius: 8px; display: block; opacity: 0.5; }
+.wall-col img { width: 100%; border-radius: 8px; display: block; opacity: 0.85; }
 @keyframes scrollUp { from { transform: translateY(0); } to { transform: translateY(-50%); } }
 @keyframes scrollDown { from { transform: translateY(-50%); } to { transform: translateY(0); } }
 .wall-veil { position: fixed; inset: 0; background:
-  radial-gradient(1200px 800px at 50% 20%, rgba(11,15,24,0.55), rgba(11,15,24,0.9) 70%),
-  linear-gradient(180deg, rgba(11,15,24,0.85), rgba(11,15,24,0.97)); }
+  linear-gradient(180deg, rgba(11,15,24,0.62), rgba(11,15,24,0.80)); }
 @media (prefers-reduced-motion: reduce) { .wall-col { animation: none; } }
 
 /* --- App --- */
@@ -31,7 +30,7 @@ header h1 { margin: 0; font-size: 2.6rem; letter-spacing: -0.03em; background: l
 .suggest { position: absolute; z-index: 5; left: 0; right: 0; margin: 0.35rem 0 0; padding: 0; list-style: none; background: #0d1220; border: 1px solid #33425f; border-radius: 10px; overflow: hidden; max-height: 340px; overflow-y: auto; }
 .suggest li { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.6rem; cursor: pointer; }
 .suggest li:hover { background: #1b2640; }
-.thumb { width: 34px; height: 50px; object-fit: cover; border-radius: 4px; flex: none; background: #1b2640; }
+.thumb { width: 44px; height: 64px; object-fit: cover; border-radius: 5px; flex: none; background: #1b2640; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
 .thumb-blank { display: flex; align-items: center; justify-content: center; color: #7a8aa0; font-weight: 700; }
 .s-title { flex: 1; }
 .badge { font-size: 0.72rem; color: #aebbcf; background: #1b2640; border: 1px solid #33425f; border-radius: 999px; padding: 0.1rem 0.5rem; white-space: nowrap; }
