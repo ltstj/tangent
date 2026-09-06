@@ -33,10 +33,28 @@ All API keys live in a local, **gitignored** `.env` (copy `.env.example`). No ke
 are committed. CheapShark needs none; TMDB, IGDB, and Supabase do. Respect each
 provider's terms (TMDB and IGDB require attribution; use official APIs, never scraping).
 
+## Run it locally (no keys needed)
+The catalog is seeded on first run, so recommendations (including the cross-media
+jump) work immediately. Add TMDB/IGDB keys later to ingest real data.
+```bash
+# 1) API
+cd backend
+python -m venv .venv && . .venv/Scripts/activate   # macOS/Linux: . .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload                       # http://localhost:8000
+
+# 2) UI (separate terminal)
+cd frontend
+npm install
+npm run dev                                         # http://localhost:5173
+```
+Optional: `python -m app.ingest` pulls real titles from any source whose keys are
+set (plus Open Library, which needs none).
+
 ## Repo layout
 ```
-backend/    FastAPI app, recommender, data ingest
-frontend/   SPA (added next; React or Vue)
+backend/    FastAPI app, recommender (SQLite + numpy), data ingest, tests
+frontend/   React + Vite SPA (search, favorites, cross-media recommendations)
 ROADMAP.md  the full phased plan
 ```
 
