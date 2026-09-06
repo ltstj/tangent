@@ -6,6 +6,7 @@ catalog seeded on first run, so it works with zero API keys. See ../ROADMAP.md.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
@@ -71,18 +72,23 @@ def ready() -> dict[str, object]:
 
 
 def _live_search(q: str, medium: Medium | None, limit: int) -> list[CatalogItem]:
-    """Query the external sources for titles not yet in the catalog. Guarded so a
-    missing key or a network hiccup just yields fewer results, never an error."""
+    """Query the external sources concurrently for titles not yet in the catalog.
+    Guarded so a missing key or a network hiccup just yields fewer results."""
+    tasks = []
+    if medium in (None, "movie", "tv"):
+        tasks.append(lambda: tmdb.search_multi(q, limit))
+    if medium in (None, "game"):
+        tasks.append(lambda: igdb.search(q, limit))
+    if medium in (None, "book"):
+        tasks.append(lambda: openlibrary.search(q, limit))
+
     live: list[CatalogItem] = []
-    try:
-        if medium in (None, "movie", "tv"):
-            live += tmdb.search_multi(q, limit)
-        if medium in (None, "game"):
-            live += igdb.search(q, limit)
-        if medium in (None, "book"):
-            live += openlibrary.search(q, limit)
-    except Exception:
-        pass
+    with ThreadPoolExecutor(max_workers=len(tasks) or 1) as pool:
+        for fut in [pool.submit(t) for t in tasks]:
+            try:
+                live += fut.result()
+            except Exception:
+                pass
     return [i for i in live if not medium or i.medium == medium]
 
 
@@ -125,6 +131,12 @@ def get_item(item_id: str) -> CatalogItem:
 @app.get("/api/media")
 def media_counts() -> dict[str, int]:
     return {m: len(store.all_items(m)) for m in ("movie", "tv", "game", "book")}
+
+
+@app.get("/api/showcase", response_model=list[CatalogItem])
+def showcase(limit: int = Query(48, ge=1, le=120)) -> list[CatalogItem]:
+    """Popular titles with cover art, for the background wall."""
+    return store.showcase(limit)
 
 
 class RecommendRequest(BaseModel):

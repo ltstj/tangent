@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import PosterWall from "./PosterWall";
 import {
   recommend,
   searchTitles,
@@ -20,6 +21,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const debounce = useRef<number | undefined>(undefined);
+  const reqSeq = useRef(0); // guards against out-of-order responses
 
   // Search-as-you-type (debounced). Live source lookups make this a real request,
   // so wait a beat and require a couple of characters.
@@ -31,11 +33,19 @@ export default function App() {
     }
     window.clearTimeout(debounce.current);
     debounce.current = window.setTimeout(() => {
+      const seq = ++reqSeq.current;
       setSearching(true);
       searchTitles(term)
-        .then((items) => setSuggestions(items.filter((i) => !favorites.some((f) => f.id === i.id))))
-        .catch(() => setSuggestions([]))
-        .finally(() => setSearching(false));
+        .then((items) => {
+          if (seq !== reqSeq.current) return; // a newer keystroke already won
+          setSuggestions(items.filter((i) => !favorites.some((f) => f.id === i.id)));
+        })
+        .catch(() => {
+          if (seq === reqSeq.current) setSuggestions([]);
+        })
+        .finally(() => {
+          if (seq === reqSeq.current) setSearching(false);
+        });
     }, 300);
     return () => window.clearTimeout(debounce.current);
   }, [query, favorites]);
@@ -64,6 +74,8 @@ export default function App() {
   }
 
   return (
+    <>
+    <PosterWall />
     <div className="app">
       <header>
         <h1>Tangent</h1>
@@ -83,7 +95,10 @@ export default function App() {
             <ul className="suggest">
               {suggestions.map((s) => (
                 <li key={s.id} onClick={() => addFavorite(s)}>
-                  <span>{s.title}</span>
+                  {s.image
+                    ? <img className="thumb" src={s.image} alt="" />
+                    : <span className="thumb thumb-blank">{MEDIUM_LABEL[s.medium][0]}</span>}
+                  <span className="s-title">{s.title}</span>
                   <span className="badge">{MEDIUM_LABEL[s.medium]}{s.year ? ` · ${s.year}` : ""}</span>
                 </li>
               ))}
@@ -120,20 +135,26 @@ export default function App() {
       <section className="results">
         {results.map((r) => (
           <article key={r.item.id} className="card">
-            <div className="card-head">
-              <h3>{r.item.title}</h3>
-              <span className="badge">{MEDIUM_LABEL[r.item.medium]}{r.item.year ? ` · ${r.item.year}` : ""}</span>
+            {r.item.image
+              ? <img className="poster" src={r.item.image} alt="" loading="lazy" />
+              : <div className="poster poster-blank">{MEDIUM_LABEL[r.item.medium]}</div>}
+            <div className="card-body">
+              <div className="card-head">
+                <h3>{r.item.title}</h3>
+                <span className="badge">{MEDIUM_LABEL[r.item.medium]}{r.item.year ? ` · ${r.item.year}` : ""}</span>
+              </div>
+              <div className="meta">
+                <span className="match">{Math.round(r.score * 100)}% match</span>
+                {r.item.rating != null && <span> · {r.item.rating.toFixed(1)}/10</span>}
+              </div>
+              {r.item.genres.length > 0 && <p className="genres">{r.item.genres.join(", ")}</p>}
+              {r.reasons.length > 0 && <p className="why">{r.reasons.join(" · ")}</p>}
+              {r.item.overview && <p className="overview">{r.item.overview}</p>}
             </div>
-            <div className="meta">
-              <span className="match">{Math.round(r.score * 100)}% match</span>
-              {r.item.rating != null && <span> · {r.item.rating.toFixed(1)}/10</span>}
-            </div>
-            {r.item.genres.length > 0 && <p className="genres">{r.item.genres.join(", ")}</p>}
-            {r.reasons.length > 0 && <p className="why">{r.reasons.join(" · ")}</p>}
-            {r.item.overview && <p className="overview">{r.item.overview}</p>}
           </article>
         ))}
       </section>
     </div>
+    </>
   );
 }

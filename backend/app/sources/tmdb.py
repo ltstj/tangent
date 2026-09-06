@@ -40,6 +40,7 @@ def normalize(raw: dict[str, Any], kind: str, genre_map: dict[int, str]) -> Cata
     year = int(date[:4]) if date[:4].isdigit() else None
     labels = [genre_map.get(gid, "") for gid in raw.get("genre_ids", [])]
     genres, tags = split_genres_tags([g for g in labels if g])
+    poster = raw.get("poster_path")
     return CatalogItem(
         id=f"{kind}:tmdb:{tmdb_id}",
         medium="movie" if kind == "movie" else "tv",
@@ -50,6 +51,7 @@ def normalize(raw: dict[str, Any], kind: str, genre_map: dict[int, str]) -> Cata
         rating=raw.get("vote_average"),
         popularity=raw.get("popularity"),
         overview=raw.get("overview", "") or "",
+        image=f"https://image.tmdb.org/t/p/w342{poster}" if poster else None,
         source="tmdb",
         source_id=str(tmdb_id),
     )

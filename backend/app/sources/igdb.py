@@ -40,6 +40,10 @@ def normalize(raw: dict[str, Any]) -> CatalogItem | None:
         # epoch seconds -> year, without Date.now (pure arithmetic).
         year = 1970 + int(raw["first_release_date"]) // 31_557_600
     rating = raw.get("total_rating")
+    cover = (raw.get("cover") or {}).get("url")
+    image = None
+    if cover:
+        image = "https:" + cover.replace("t_thumb", "t_cover_big")
     return CatalogItem(
         id=f"game:igdb:{igdb_id}",
         medium="game",
@@ -50,6 +54,7 @@ def normalize(raw: dict[str, Any]) -> CatalogItem | None:
         rating=round(rating / 10, 1) if rating else None,  # IGDB is 0..100
         popularity=raw.get("total_rating_count"),
         overview=raw.get("summary", "") or "",
+        image=image,
         source="igdb",
         source_id=str(igdb_id),
     )
@@ -76,7 +81,7 @@ def search(query: str, limit: int = 8) -> list[CatalogItem]:
         token = _cached_token(client)
         headers = {"Client-ID": settings.igdb_client_id, "Authorization": f"Bearer {token}"}
         body = (
-            f'search "{safe}"; fields name, summary, genres.name, themes.name, '
+            f'search "{safe}"; fields name, summary, cover.url, genres.name, themes.name, '
             f"total_rating, total_rating_count, first_release_date; limit {limit};"
         )
         data = client.post(f"{BASE}/games", headers=headers, content=body).json()
@@ -91,7 +96,7 @@ def fetch_popular(limit: int = 100) -> list[CatalogItem]:
         token = _token(client)
         headers = {"Client-ID": settings.igdb_client_id, "Authorization": f"Bearer {token}"}
         body = (
-            "fields name, summary, genres.name, themes.name, total_rating, "
+            "fields name, summary, cover.url, genres.name, themes.name, total_rating, "
             "total_rating_count, first_release_date; "
             f"sort total_rating_count desc; where total_rating_count > 50; limit {limit};"
         )

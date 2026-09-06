@@ -12,6 +12,7 @@ export interface CatalogItem {
   tags: string[];
   rating: number | null;
   overview: string;
+  image: string | null;
 }
 
 export interface Recommendation {
@@ -25,6 +26,12 @@ export async function searchTitles(q: string, medium?: Medium): Promise<CatalogI
   if (medium) params.set("medium", medium);
   const res = await fetch(`${BASE}/api/search?${params}`);
   if (!res.ok) throw new Error(`search failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getShowcase(limit = 48): Promise<CatalogItem[]> {
+  const res = await fetch(`${BASE}/api/showcase?limit=${limit}`);
+  if (!res.ok) return [];
   return res.json();
 }
 

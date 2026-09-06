@@ -23,6 +23,7 @@ class CatalogItem(BaseModel):
     rating: float | None = None   # normalized to 0..10 at ingest
     popularity: float | None = None
     overview: str = ""
+    image: str | None = None      # poster / cover art URL
     source: str = ""              # "tmdb" | "igdb" | "openlibrary" | "seed"
     source_id: str = ""
 
