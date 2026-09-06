@@ -8,7 +8,7 @@ the catalog ingest, search, and recommender come in Phase 1 (see `../ROADMAP.md`
 cd backend
 python -m venv .venv && . .venv/Scripts/activate   # Windows; use . .venv/bin/activate on macOS/Linux
 pip install -r requirements.txt
-cp ../.env.example ../.env    # then fill in your keys (never commit .env)
+cp .env.example .env    # then fill in your keys (never commit .env)
 uvicorn app.main:app --reload
 ```
 - `GET /health` returns `{status: ok}`
