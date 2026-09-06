@@ -55,6 +55,35 @@ def normalize(raw: dict[str, Any]) -> CatalogItem | None:
     )
 
 
+_TOKEN_CACHE: str | None = None
+
+
+def _cached_token(client: httpx.Client) -> str:
+    global _TOKEN_CACHE
+    if _TOKEN_CACHE is None:
+        _TOKEN_CACHE = _token(client)
+    return _TOKEN_CACHE
+
+
+def search(query: str, limit: int = 8) -> list[CatalogItem]:
+    """Live IGDB game search (for autocomplete). [] if creds are missing."""
+    if not (settings.igdb_client_id and settings.igdb_client_secret):
+        return []
+    safe = query.replace('"', "").strip()
+    if not safe:
+        return []
+    with httpx.Client(timeout=15) as client:
+        token = _cached_token(client)
+        headers = {"Client-ID": settings.igdb_client_id, "Authorization": f"Bearer {token}"}
+        body = (
+            f'search "{safe}"; fields name, summary, genres.name, themes.name, '
+            f"total_rating, total_rating_count, first_release_date; limit {limit};"
+        )
+        data = client.post(f"{BASE}/games", headers=headers, content=body).json()
+    out = [normalize(raw) for raw in data]
+    return [i for i in out if i]
+
+
 def fetch_popular(limit: int = 100) -> list[CatalogItem]:
     if not (settings.igdb_client_id and settings.igdb_client_secret):
         raise RuntimeError("IGDB_CLIENT_ID / IGDB_CLIENT_SECRET are not set")

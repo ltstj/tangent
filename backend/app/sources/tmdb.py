@@ -55,6 +55,36 @@ def normalize(raw: dict[str, Any], kind: str, genre_map: dict[int, str]) -> Cata
     )
 
 
+_GENRE_CACHE: dict[str, dict[int, str]] | None = None
+
+
+def _cached_genre_maps(client: httpx.Client) -> dict[str, dict[int, str]]:
+    global _GENRE_CACHE
+    if _GENRE_CACHE is None:
+        _GENRE_CACHE = genre_maps(client)
+    return _GENRE_CACHE
+
+
+def search_multi(query: str, limit: int = 8) -> list[CatalogItem]:
+    """Live TMDB search across movies + TV (for autocomplete). [] if no key."""
+    if not settings.tmdb_api_key:
+        return []
+    with httpx.Client(timeout=15) as client:
+        maps = _cached_genre_maps(client)
+        data = _get(client, "/search/multi", query=query, page=1)
+    out: list[CatalogItem] = []
+    for raw in data.get("results", []):
+        mt = raw.get("media_type")
+        if mt not in ("movie", "tv"):
+            continue
+        item = normalize(raw, mt, maps.get(mt, {}))
+        if item:
+            out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def fetch_popular(kind: str = "movie", pages: int = 2) -> list[CatalogItem]:
     if not settings.tmdb_api_key:
         raise RuntimeError("TMDB_API_KEY is not set")

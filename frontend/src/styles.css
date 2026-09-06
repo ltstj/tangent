@@ -7,6 +7,7 @@ header h1 { margin: 0; font-size: 2rem; letter-spacing: -0.02em; }
 .panel { background: #161d2b; border: 1px solid #263145; border-radius: 14px; padding: 1.25rem; }
 .lbl { display: block; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: #93a2b8; margin-bottom: 0.4rem; }
 .search { position: relative; }
+.searching { position: absolute; right: 0.7rem; top: 0.65rem; font-size: 0.78rem; color: #7a8aa0; }
 .search input, select { width: 100%; padding: 0.6rem 0.75rem; border-radius: 9px; border: 1px solid #2d3a52; background: #0f1420; color: #e8edf4; font-size: 0.95rem; }
 .suggest { position: absolute; z-index: 5; left: 0; right: 0; margin: 0.3rem 0 0; padding: 0; list-style: none; background: #0f1420; border: 1px solid #2d3a52; border-radius: 9px; overflow: hidden; }
 .suggest li { display: flex; justify-content: space-between; align-items: center; padding: 0.55rem 0.75rem; cursor: pointer; }

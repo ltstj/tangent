@@ -29,6 +29,15 @@ def test_igdb_normalize_game():
     assert item.rating == 9.1
 
 
+def test_live_search_guards_without_keys(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "tmdb_api_key", "")
+    monkeypatch.setattr(settings, "igdb_client_id", "")
+    monkeypatch.setattr(settings, "igdb_client_secret", "")
+    assert tmdb.search_multi("anything") == []
+    assert igdb.search("anything") == []
+
+
 def test_openlibrary_normalize_book():
     doc = {"key": "/works/OL12345W", "title": "Dune", "first_publish_year": 1965,
            "subject": ["Science Fiction", "Politics", "Desert"], "ratings_average": 4.3}

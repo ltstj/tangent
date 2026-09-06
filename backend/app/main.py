@@ -16,6 +16,7 @@ from .config import settings
 from .models import CatalogItem, Medium
 from .recommend import TasteModel
 from .seed import SEED_ITEMS
+from .sources import igdb, openlibrary, tmdb
 from .store import CatalogStore
 
 
@@ -69,14 +70,48 @@ def ready() -> dict[str, object]:
     }
 
 
+def _live_search(q: str, medium: Medium | None, limit: int) -> list[CatalogItem]:
+    """Query the external sources for titles not yet in the catalog. Guarded so a
+    missing key or a network hiccup just yields fewer results, never an error."""
+    live: list[CatalogItem] = []
+    try:
+        if medium in (None, "movie", "tv"):
+            live += tmdb.search_multi(q, limit)
+        if medium in (None, "game"):
+            live += igdb.search(q, limit)
+        if medium in (None, "book"):
+            live += openlibrary.search(q, limit)
+    except Exception:
+        pass
+    return [i for i in live if not medium or i.medium == medium]
+
+
 @app.get("/api/search", response_model=list[CatalogItem])
 def search(
     q: str = Query(..., min_length=1),
     medium: Medium | None = None,
     limit: int = Query(10, ge=1, le=50),
 ) -> list[CatalogItem]:
-    """Autocomplete over the catalog (title match)."""
-    return store.search(q, medium=medium, limit=limit)
+    """Autocomplete. Serves local catalog hits first; when there aren't enough,
+    it searches TMDB/IGDB/Open Library live, adds those titles to the catalog (so
+    they're recommendable), and merges them in."""
+    local = store.search(q, medium=medium, limit=limit)
+    if len(local) >= limit:
+        return local
+
+    live = _live_search(q, medium, limit)
+    new_items = [i for i in live if store.get(i.id) is None]
+    if new_items:
+        store.upsert_items(new_items)
+        refresh_model()  # so the new titles are usable in recommendations
+
+    seen = {i.id for i in local}
+    merged = list(local)
+    for it in live:
+        if it.id not in seen:
+            seen.add(it.id)
+            merged.append(it)
+    return merged[:limit]
 
 
 @app.get("/api/item/{item_id:path}", response_model=CatalogItem)

@@ -18,20 +18,25 @@ export default function App() {
   const [results, setResults] = useState<Recommendation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [searching, setSearching] = useState(false);
   const debounce = useRef<number | undefined>(undefined);
 
-  // Search-as-you-type (debounced).
+  // Search-as-you-type (debounced). Live source lookups make this a real request,
+  // so wait a beat and require a couple of characters.
   useEffect(() => {
-    if (!query.trim()) {
+    const term = query.trim();
+    if (term.length < 2) {
       setSuggestions([]);
       return;
     }
     window.clearTimeout(debounce.current);
     debounce.current = window.setTimeout(() => {
-      searchTitles(query.trim())
+      setSearching(true);
+      searchTitles(term)
         .then((items) => setSuggestions(items.filter((i) => !favorites.some((f) => f.id === i.id))))
-        .catch(() => setSuggestions([]));
-    }, 180);
+        .catch(() => setSuggestions([]))
+        .finally(() => setSearching(false));
+    }, 300);
     return () => window.clearTimeout(debounce.current);
   }, [query, favorites]);
 
@@ -73,6 +78,7 @@ export default function App() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Type a movie, show, game, or book..."
           />
+          {searching && <span className="searching">searching...</span>}
           {suggestions.length > 0 && (
             <ul className="suggest">
               {suggestions.map((s) => (
