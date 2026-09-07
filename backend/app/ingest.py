@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 
+from .dedupe import plan_seed_merges
 from .seed import SEED_ITEMS
 from .sources import igdb, openlibrary, tmdb
 from .store import CatalogStore
@@ -36,6 +37,15 @@ def ingest(store: CatalogStore, seed_only: bool = False) -> dict[str, int]:
             counts[name] = store.upsert_items(fetch())
         except Exception as exc:
             print(f"[{name}] skipped: {exc}", file=sys.stderr)
+
+    # The seed upsert above is unconditional, so a second ingest would reinstate
+    # the placeholder rows that real sources have since superseded. Fold them
+    # back in here and ingest stays idempotent.
+    updated, drop = plan_seed_merges(store.all_items())
+    if drop:
+        store.upsert_items(updated)
+        store.delete_items(drop)
+        counts["seed-merged"] = len(drop)
     return counts
 
 
