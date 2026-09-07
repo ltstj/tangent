@@ -37,6 +37,13 @@ from .models import CatalogItem, Medium
 # matching The Witcher 3 and drifts to whatever shares the generic 'action').
 W_GENRE = 1.0
 W_TAG = 0.6
+# Synopsis embeddings (see embed.py). This is the block that answers "a game
+# like this show": genres and tags only match on a shared literal token, and the
+# sources agree on ~14% of each other's tag vocabulary, so meaning has to carry
+# the rest. Weighted near genre because it is the more reliable cross-media
+# signal of the two, but not above it - a semantic near-miss should not outrank
+# an actual genre match.
+W_EMBED = 0.9
 W_RATING = 0.25
 W_ERA = 0.15
 # The era scale is fixed (not Date.now-derived) so results are deterministic.
@@ -85,7 +92,11 @@ def _era_norm(year: int | None) -> float:
 
 
 class TasteModel:
-    def __init__(self, items: Iterable[CatalogItem]) -> None:
+    def __init__(
+        self,
+        items: Iterable[CatalogItem],
+        embeddings: dict[str, np.ndarray] | None = None,
+    ) -> None:
         self.items: list[CatalogItem] = list(items)
         self.index: dict[str, int] = {it.id: i for i, it in enumerate(self.items)}
         g_vocab = sorted({tok for it in self.items for tok in it.genre_tokens()})
@@ -101,11 +112,21 @@ class TasteModel:
         self.tags = np.zeros((n, len(t_vocab)), dtype=np.float32)
         self.rating = np.zeros(n, dtype=np.float32)
         self.era = np.zeros(n, dtype=np.float32)
+        # Zero rows for items with no embedding yet: a zero block contributes
+        # nothing rather than skewing the score, so partial coverage degrades
+        # gracefully instead of ranking un-embedded titles oddly.
+        vecs = embeddings or {}
+        dim = len(next(iter(vecs.values()))) if vecs else 0
+        self.embed = np.zeros((n, dim), dtype=np.float32)
+
         for i, it in enumerate(self.items):
             _fill_unit(self.genres[i], it.genre_tokens(), self.genre_vocab, self.genre_idf)
             _fill_unit(self.tags[i], it.tag_tokens(), self.tag_vocab, self.tag_idf)
             self.rating[i] = (it.rating if it.rating is not None else 5.0) / 10.0
             self.era[i] = _era_norm(it.year)
+            v = vecs.get(it.id)
+            if v is not None and dim:
+                self.embed[i] = v
 
     def recommend(
         self,
@@ -131,6 +152,8 @@ class TasteModel:
             + W_RATING * (1.0 - np.abs(self.rating - r_taste))
             + W_ERA * (1.0 - np.abs(self.era - e_taste))
         )
+        if self.embed.shape[1]:
+            scores = scores + W_EMBED * (self.embed @ _unit(self.embed[rows].mean(axis=0)))
 
         fav_items = [self.items[r] for r in rows]
         fav_genres = {g for it in fav_items for g in it.genres}

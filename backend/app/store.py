@@ -17,6 +17,8 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+import numpy as np
+from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -32,6 +34,13 @@ _COLS = (
     "id, medium, title, year, rating, popularity, overview, "
     "source, source_id, genres, tags, image"
 )
+
+
+def _to_array(value) -> np.ndarray:
+    """pgvector hands back its own Vector wrapper, not a bare array."""
+    if hasattr(value, "to_numpy"):
+        value = value.to_numpy()
+    return np.asarray(value, dtype=np.float32)
 
 
 def _row_to_item(row: dict) -> CatalogItem:
@@ -69,6 +78,9 @@ class CatalogStore:
         self._pool = ConnectionPool(
             self.dsn, min_size=1, max_size=5, timeout=15, open=False,
             kwargs={"row_factory": dict_row},
+            # pgvector's type has to be registered per connection, or the
+            # `embedding` column comes back as a string and writes fail.
+            configure=register_vector,
         )
         self._opened = False
 
@@ -155,6 +167,42 @@ class CatalogStore:
             cur.execute(sql, params)
             return [_row_to_item(r) for r in cur.fetchall()]
 
+    def delete_items(self, ids: list[str]) -> int:
+        """Remove rows by id. Used to retire seed rows superseded by real ones."""
+        if not ids:
+            return 0
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM items WHERE id = ANY(%s)", (list(ids),))
+            return cur.rowcount
+
+    def upsert_embeddings(self, vectors: dict[str, np.ndarray]) -> int:
+        """Write synopsis embeddings for ids already in the catalog."""
+        if not vectors:
+            return 0
+        rows = [(np.asarray(v, dtype=np.float32), k) for k, v in vectors.items()]
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.executemany(
+                "UPDATE items SET embedding = %s, updated_at = now() WHERE id = %s", rows
+            )
+        return len(rows)
+
+    def embeddings(self) -> dict[str, np.ndarray]:
+        """id -> embedding, for the rows that have one.
+
+        Kept separate from all_items() so the 384-float column is only pulled by
+        the caller that actually needs it.
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, embedding FROM items WHERE embedding IS NOT NULL")
+            return {r["id"]: _to_array(r["embedding"]) for r in cur.fetchall()}
+
+    def embedding_coverage(self) -> tuple[int, int]:
+        """(rows with an embedding, total rows)."""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(embedding) AS have, count(*) AS total FROM items")
+            r = cur.fetchone()
+            return r["have"], r["total"]
+
     def close(self) -> None:
         if self._opened:
             self._pool.close()
@@ -178,7 +226,8 @@ class SqliteCatalogStore:
             CREATE TABLE IF NOT EXISTS items (
                 id TEXT PRIMARY KEY, medium TEXT NOT NULL, title TEXT NOT NULL,
                 year INTEGER, rating REAL, popularity REAL, overview TEXT,
-                source TEXT, source_id TEXT, genres TEXT, tags TEXT, image TEXT
+                source TEXT, source_id TEXT, genres TEXT, tags TEXT, image TEXT,
+                embedding TEXT   -- JSON array; pgvector's column, minus pgvector
             )
             """
         )
@@ -246,6 +295,32 @@ class SqliteCatalogStore:
             sql += " WHERE medium = ?"
             params = (medium,)
         return [_row_to_item(dict(r)) for r in self._conn.execute(sql, params).fetchall()]
+
+    def delete_items(self, ids: list[str]) -> int:
+        if not ids:
+            return 0
+        cur = self._conn.executemany("DELETE FROM items WHERE id = ?", [(i,) for i in ids])
+        self._conn.commit()
+        return len(ids)
+
+    def upsert_embeddings(self, vectors: dict[str, np.ndarray]) -> int:
+        rows = [(json.dumps(np.asarray(v, dtype=np.float32).tolist()), k)
+                for k, v in vectors.items()]
+        self._conn.executemany("UPDATE items SET embedding = ? WHERE id = ?", rows)
+        self._conn.commit()
+        return len(rows)
+
+    def embeddings(self) -> dict[str, np.ndarray]:
+        rows = self._conn.execute(
+            "SELECT id, embedding FROM items WHERE embedding IS NOT NULL"
+        ).fetchall()
+        return {r["id"]: _to_array(json.loads(r["embedding"])) for r in rows}
+
+    def embedding_coverage(self) -> tuple[int, int]:
+        row = self._conn.execute(
+            "SELECT COUNT(embedding) AS have, COUNT(*) AS total FROM items"
+        ).fetchone()
+        return row["have"], row["total"]
 
     def close(self) -> None:
         self._conn.close()

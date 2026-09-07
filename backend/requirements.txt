@@ -8,3 +8,8 @@ numpy==2.2.1
 # threadpooled request its own connection instead of serializing on one.
 psycopg[binary]==3.3.5
 psycopg-pool==3.3.1
+# Phase 2: local synopsis embeddings (all-MiniLM-L6-v2, 384-dim).
+# sentence-transformers pulls torch, so first install is large and slow.
+sentence-transformers==6.0.1
+pgvector==0.5.0
+

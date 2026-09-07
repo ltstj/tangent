@@ -42,17 +42,20 @@ app.add_middleware(
 store = CatalogStore()
 _model: TasteModel | None = None
 _items: list[CatalogItem] | None = None
+_embeddings: dict | None = None
 _model_lock = Lock()
 
 
 def get_model() -> TasteModel:
     """Cached taste model; rebuilt after the catalog changes via refresh_model()."""
-    global _model, _items
+    global _model, _items, _embeddings
     with _model_lock:
         if _items is None:
             _items = store.all_items()
+        if _embeddings is None:
+            _embeddings = store.embeddings()
         if _model is None:
-            _model = TasteModel(_items)
+            _model = TasteModel(_items, _embeddings)
         return _model
 
 
@@ -64,11 +67,12 @@ def refresh_model(added: list[CatalogItem] | None = None) -> None:
     which, on the autocomplete path, is worse than the live source lookup it was
     meant to complement. With no argument the next build reloads in full.
     """
-    global _model, _items
+    global _model, _items, _embeddings
     with _model_lock:
         _model = None
         if added is None or _items is None:
             _items = None
+            _embeddings = None
             return
         merged = {it.id: it for it in _items}
         merged.update({it.id: it for it in added})
@@ -87,6 +91,7 @@ def ready() -> dict[str, object]:
         "tmdb": bool(settings.tmdb_api_key),
         "igdb": bool(settings.igdb_client_id and settings.igdb_client_secret),
         "supabase": bool(settings.supabase_url and settings.database_url),
+        "embeddings": "%d/%d" % store.embedding_coverage(),
         "openlibrary": True,
         "cheapshark": True,
     }

@@ -69,3 +69,56 @@ def test_rare_genres_outweigh_ubiquitous_ones():
     m = TasteModel([*common, rare, twin, probe])
     scores = {r["item"].id: r["score"] for r in m.recommend(["tv:t:probe"], target_media=["game"], limit=5)}
     assert scores["game:t:rare"] > scores["game:t:common"]
+
+
+def test_embedding_block_bridges_disjoint_tag_vocabularies():
+    """The point of the embedding block.
+
+    Two titles that share no genre-vocabulary token and no tag token cannot be
+    connected by the structured blocks at all - which is why TMDB and IGDB, who
+    agree on ~14% of each other's tag vocabulary, could only ever match on broad
+    genre. A synopsis vector connects them on meaning instead.
+    """
+    import numpy as np
+
+    from app.models import CatalogItem
+    from app.recommend import TasteModel
+
+    show = CatalogItem(id="tv:t:show", medium="tv", title="Show",
+                       genres=["drama"], tags=["dragon", "kingdom"])
+    near = CatalogItem(id="game:t:near", medium="game", title="Near",
+                       genres=["rpg"], tags=["medieval", "sword"])
+    far = CatalogItem(id="game:t:far", medium="game", title="Far",
+                      genres=["rpg"], tags=["spreadsheet"])
+    assert not (set(show.tags) & set(near.tags))  # nothing for the tag block to match
+
+    # Hand-built vectors: `near` points with the show, `far` points away.
+    vecs = {
+        "tv:t:show": np.array([1.0, 0.0], dtype=np.float32),
+        "game:t:near": np.array([0.94, 0.34], dtype=np.float32),
+        "game:t:far": np.array([0.0, 1.0], dtype=np.float32),
+    }
+    without = TasteModel([show, near, far])
+    with_embed = TasteModel([show, near, far], vecs)
+
+    def score(model, item_id):
+        return next(r["score"] for r in model.recommend(["tv:t:show"], limit=5)
+                    if r["item"].id == item_id)
+
+    # Structurally the two games are interchangeable; only meaning separates them.
+    assert score(without, "game:t:near") == score(without, "game:t:far")
+    assert score(with_embed, "game:t:near") > score(with_embed, "game:t:far")
+
+
+def test_missing_embeddings_degrade_gracefully():
+    """Partial coverage must not skew ranking: 56 books have no synopsis at all."""
+    import numpy as np
+
+    from app.models import CatalogItem
+    from app.recommend import TasteModel
+
+    a = CatalogItem(id="movie:t:a", medium="movie", title="A", genres=["scifi"])
+    b = CatalogItem(id="book:t:b", medium="book", title="B", genres=["scifi"])
+    model = TasteModel([a, b], {"movie:t:a": np.ones(4, dtype=np.float32) / 2})
+    recs = model.recommend(["movie:t:a"], limit=5)
+    assert recs and recs[0]["item"].id == "book:t:b"   # un-embedded item still ranks
