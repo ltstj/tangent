@@ -65,3 +65,15 @@ def test_tag_forms_are_canonicalized_across_sources():
     # Words that merely end in s must survive intact.
     assert normalize_tag("chess") == "chess"
     assert normalize_tag("princess") == "princess"
+
+
+def test_platform_and_awards_metadata_is_dropped_but_steampunk_survives():
+    # IGDB keywords mix real themes with storefront/awards metadata. The filter
+    # is an explicit list rather than a pattern precisely because "steampunk"
+    # would not survive any rule matching /steam/.
+    _, tags = split_genres_tags([
+        "Steam", "Steam Trading Card", "Achievements",
+        "The Game Awards - Best Audio Design Nominee", "PlayStation Experience 2016",
+        "Licensed Game", "Year in the Title", "Steampunk", "Cyberpunk", "Medieval",
+    ])
+    assert tags == ["steampunk", "cyberpunk", "medieval"]

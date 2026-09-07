@@ -72,9 +72,24 @@ _NOISE = {
     "textbook", "textbooks", "readingmaterials", "translations",
     "popularprint", "lendinglibrary", "paperback", "hardcover", "ebook",
     "audiobook", "booksandreading", "literarycollections",
+    # IGDB keywords carry storefront, platform and awards metadata alongside
+    # real themes. Listed explicitly rather than pattern-matched, because
+    # "steampunk" is a genuine taste tag and any /steam/ rule eats it.
+    "steam", "steamachievement", "steamtradingcard", "steamcloud",
+    "steamworkshop", "steamearlyaccess", "achievement", "retroachievement",
+    "playstationtrophie", "playstationtrophies", "playstationplus",
+    "playstationnetwork", "nintendosupersystem", "nintendoswitchonline",
+    "xboxcontrollersupportforpc", "xboxlive", "singleplayeronly",
+    "licensedgame", "censoredversion", "yearinthetitle", "availableonlunaplus",
+    "gamecriticsaward", "gamecriticsawards", "digitaldistribution",
 }
 # Prefixes for machine-generated collection ids ("collectionid...", "nyt:...").
-_NOISE_PREFIXES = ("collectionid", "nyt", "lccn", "isbn", "ddc", "lcc")
+_NOISE_PREFIXES = (
+    "collectionid", "nyt", "lccn", "isbn", "ddc", "lcc",
+    # Awards and expo families: "thegameawardsbestaudiodesignnominee" and a
+    # dozen siblings. Safe as prefixes - no real theme starts this way.
+    "thegameawards", "playstationexperience",
+)
 
 # Sources describe the same idea in different words, and by far the commonest
 # split is plain plurality: IGDB says "dragons", "monsters", "zombies" where TMDB
