@@ -27,6 +27,14 @@ class CatalogItem(BaseModel):
     source: str = ""              # "tmdb" | "igdb" | "openlibrary" | "seed"
     source_id: str = ""
 
+    def genre_tokens(self) -> list[str]:
+        """Unified-genre tokens: the dominant, cross-media-comparable signal."""
+        return [f"g:{g}" for g in self.genres]
+
+    def tag_tokens(self) -> list[str]:
+        """Theme/keyword tokens: finer-grained, and far noisier per source."""
+        return [f"t:{t}" for t in self.tags]
+
     def taste_tokens(self) -> list[str]:
         """Genres + tags as the categorical feature tokens for similarity."""
-        return [*(f"g:{g}" for g in self.genres), *(f"t:{t}" for t in self.tags)]
+        return [*self.genre_tokens(), *self.tag_tokens()]

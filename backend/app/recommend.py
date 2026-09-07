@@ -1,9 +1,17 @@
 """Content-based recommender (Phase 1).
 
-Each title becomes a vector: a multi-hot of its unified genre/tag tokens (the
-dominant signal) plus a couple of normalized numeric metrics (rating, era). A
-user's taste is the average of their favorites' vectors; recommendations are the
-nearest catalog items by cosine similarity, filtered to the medium(s) asked for.
+Each title becomes several independent blocks: a multi-hot of its unified genre
+tokens (the dominant signal), a multi-hot of its theme tags, and a couple of
+normalized numeric metrics (rating, era). The score is a weighted blend of the
+per-block similarities, as ROADMAP.md describes, and a user's taste is the
+per-block average of their favorites.
+
+Blending per block rather than cosine-ing one concatenated vector is what keeps
+cross-media honest. Sources are wildly uneven in how many tags they supply (TMDB
+gives none, Open Library a dozen), and under a single cosine those extra tags
+inflate the vector norm, so a tag-rich book scored below a tag-less movie even
+when both matched the query genre exactly. Per-block, one shared genre is worth
+the same to a book as to a movie.
 
 Because the token vocabulary is shared across media, a movie and a game with the
 same genres/themes sit near each other automatically, which is what powers the
@@ -18,12 +26,55 @@ import numpy as np
 
 from .models import CatalogItem, Medium
 
-# How much categorical taste (genres/tags) counts vs numeric metrics.
-W_CATEGORICAL = 1.0
+# How much each block of taste counts. Genres and tags are weighted and
+# normalized *separately* on purpose: sources are wildly uneven in how many tags
+# they supply (TMDB gives none, Open Library gives a dozen), and normalizing them
+# together let a verbose source dilute its own genre signal until its titles
+# stopped matching anything cross-media. Splitting the blocks makes one shared
+# genre worth the same to a book as to a movie.
+# W_TAG keeps genre dominant while leaving tags decisive between titles that
+# share a genre (below ~0.45 the seed cases regress: Game of Thrones stops
+# matching The Witcher 3 and drifts to whatever shares the generic 'action').
+W_GENRE = 1.0
+W_TAG = 0.6
 W_RATING = 0.25
 W_ERA = 0.15
 # The era scale is fixed (not Date.now-derived) so results are deterministic.
 _ERA_MIN, _ERA_MAX = 1950, 2030
+
+
+def _unit(vec: np.ndarray) -> np.ndarray:
+    """L2-normalize, tolerating an all-zero block (an item with no tags)."""
+    norm = float(np.linalg.norm(vec))
+    return vec / norm if norm else vec
+
+
+def _idf(items: list[CatalogItem], vocab: dict[str, int], tokens_of) -> np.ndarray:
+    """Inverse document frequency per token.
+
+    Without it every token counts the same, so sharing "action" (29% of the
+    catalog) looks as meaningful as sharing "cyberpunk" (one title), and generic
+    blockbusters crowd out the title that matches on something distinctive.
+    """
+    df = np.zeros(len(vocab), dtype=np.float32)
+    for it in items:
+        for t in set(tokens_of(it)):
+            i = vocab.get(t)
+            if i is not None:
+                df[i] += 1.0
+    return np.log(1.0 + len(items) / np.maximum(df, 1.0)).astype(np.float32)
+
+
+def _fill_unit(row: np.ndarray, tokens: list[str], vocab: dict[str, int],
+               idf: np.ndarray) -> None:
+    """Write a unit-length, IDF-weighted multi-hot of `tokens` into `row`, in place."""
+    idx = [vocab[t] for t in tokens if t in vocab]
+    if not idx:
+        return
+    row[idx] = idf[idx]
+    norm = float(np.linalg.norm(row))
+    if norm:
+        row /= norm
 
 
 def _era_norm(year: int | None) -> float:
@@ -37,25 +88,24 @@ class TasteModel:
     def __init__(self, items: Iterable[CatalogItem]) -> None:
         self.items: list[CatalogItem] = list(items)
         self.index: dict[str, int] = {it.id: i for i, it in enumerate(self.items)}
-        vocab = sorted({tok for it in self.items for tok in it.taste_tokens()})
-        self.vocab: dict[str, int] = {tok: i for i, tok in enumerate(vocab)}
-        self.matrix = np.zeros((len(self.items), len(vocab) + 2), dtype=np.float32)
-        for i, it in enumerate(self.items):
-            self.matrix[i] = self._vector(it)
+        g_vocab = sorted({tok for it in self.items for tok in it.genre_tokens()})
+        t_vocab = sorted({tok for it in self.items for tok in it.tag_tokens()})
+        self.genre_vocab: dict[str, int] = {tok: i for i, tok in enumerate(g_vocab)}
+        self.tag_vocab: dict[str, int] = {tok: i for i, tok in enumerate(t_vocab)}
 
-    def _vector(self, item: CatalogItem) -> np.ndarray:
-        vec = np.zeros(len(self.vocab) + 2, dtype=np.float32)
-        toks = [self.vocab[t] for t in item.taste_tokens() if t in self.vocab]
-        if toks:
-            # L2-normalize the categorical block so titles with many tags don't dominate.
-            cat = np.zeros(len(self.vocab), dtype=np.float32)
-            cat[toks] = 1.0
-            cat /= np.linalg.norm(cat)
-            vec[: len(self.vocab)] = cat * W_CATEGORICAL
-        rating = (item.rating if item.rating is not None else 5.0) / 10.0
-        vec[-2] = rating * W_RATING
-        vec[-1] = _era_norm(item.year) * W_ERA
-        return vec
+        self.genre_idf = _idf(self.items, self.genre_vocab, lambda it: it.genre_tokens())
+        self.tag_idf = _idf(self.items, self.tag_vocab, lambda it: it.tag_tokens())
+
+        n = len(self.items)
+        self.genres = np.zeros((n, len(g_vocab)), dtype=np.float32)
+        self.tags = np.zeros((n, len(t_vocab)), dtype=np.float32)
+        self.rating = np.zeros(n, dtype=np.float32)
+        self.era = np.zeros(n, dtype=np.float32)
+        for i, it in enumerate(self.items):
+            _fill_unit(self.genres[i], it.genre_tokens(), self.genre_vocab, self.genre_idf)
+            _fill_unit(self.tags[i], it.tag_tokens(), self.tag_vocab, self.tag_idf)
+            self.rating[i] = (it.rating if it.rating is not None else 5.0) / 10.0
+            self.era[i] = _era_norm(it.year)
 
     def recommend(
         self,
@@ -66,14 +116,23 @@ class TasteModel:
         known = [fid for fid in favorite_ids if fid in self.index]
         if not known:
             return []
-        taste = self.matrix[[self.index[fid] for fid in known]].mean(axis=0)
-        taste_n = taste / (np.linalg.norm(taste) or 1.0)
+        rows = [self.index[fid] for fid in known]
 
-        norms = np.linalg.norm(self.matrix, axis=1)
-        norms[norms == 0] = 1.0
-        scores = (self.matrix @ taste_n) / norms
+        # Taste = per-block average of the favorites, each block re-normalized so
+        # one block's magnitude can't borrow weight from another.
+        g_taste = _unit(self.genres[rows].mean(axis=0))
+        t_taste = _unit(self.tags[rows].mean(axis=0))
+        r_taste = float(self.rating[rows].mean())
+        e_taste = float(self.era[rows].mean())
 
-        fav_items = [self.items[self.index[fid]] for fid in known]
+        scores = (
+            W_GENRE * (self.genres @ g_taste)
+            + W_TAG * (self.tags @ t_taste)
+            + W_RATING * (1.0 - np.abs(self.rating - r_taste))
+            + W_ERA * (1.0 - np.abs(self.era - e_taste))
+        )
+
+        fav_items = [self.items[r] for r in rows]
         fav_genres = {g for it in fav_items for g in it.genres}
         fav_tags = {t for it in fav_items for t in it.tags}
         exclude = set(known)
