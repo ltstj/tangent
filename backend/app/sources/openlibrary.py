@@ -62,7 +62,8 @@ def fetch_default(limit_per_subject: int = 25) -> list[CatalogItem]:
 
 
 def search(query: str, limit: int = 10) -> list[CatalogItem]:
-    with httpx.Client(timeout=30) as client:
+    # Runs off the request path (see _live_search), so a generous but bounded timeout.
+    with httpx.Client(timeout=8) as client:
         data = client.get(f"{BASE}/search.json", params={"q": query, "limit": limit,
             "fields": "key,title,first_publish_year,subject,ratings_average,cover_i"}).json()
     out = [normalize_doc(d) for d in data.get("docs", [])]
