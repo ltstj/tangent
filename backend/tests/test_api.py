@@ -4,14 +4,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
-from app.store import CatalogStore
+from app.store import SqliteCatalogStore
 
 
 @pytest.fixture
 def client():
     # Point the app at a fresh in-memory catalog; the lifespan handler seeds it
     # (lifespan only runs when TestClient is used as a context manager).
-    main.store = CatalogStore(":memory:")
+    main.store = SqliteCatalogStore(":memory:")
     main.refresh_model()
     with TestClient(main.app) as c:
         yield c

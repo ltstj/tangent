@@ -4,3 +4,7 @@ pydantic==2.10.4
 pydantic-settings==2.7.0
 httpx==0.28.1
 numpy==2.2.1
+# Phase 2: Supabase Postgres catalog (pgvector). psycopg-pool hands each
+# threadpooled request its own connection instead of serializing on one.
+psycopg[binary]==3.3.5
+psycopg-pool==3.3.1

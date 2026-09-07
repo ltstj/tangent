@@ -4,12 +4,12 @@ import pytest
 
 from app.recommend import TasteModel
 from app.seed import SEED_ITEMS
-from app.store import CatalogStore
+from app.store import SqliteCatalogStore
 
 
 @pytest.fixture
-def store() -> CatalogStore:
-    s = CatalogStore(":memory:")
+def store() -> SqliteCatalogStore:
+    s = SqliteCatalogStore(":memory:")
     s.upsert_items(SEED_ITEMS)
     return s
 
