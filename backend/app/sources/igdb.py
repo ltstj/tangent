@@ -14,6 +14,8 @@ from ..models import CatalogItem
 from ..taxonomy import split_genres_tags
 
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
+# IGDB keyword lists run long on big titles; keep the most relevant handful.
+MAX_KEYWORDS = 14
 BASE = "https://api.igdb.com/v4"
 
 
@@ -34,6 +36,11 @@ def normalize(raw: dict[str, Any]) -> CatalogItem | None:
     # IGDB expands genres/themes to objects with "name" when requested.
     labels = [g.get("name", "") for g in raw.get("genres", [])]
     labels += [t.get("name", "") for t in raw.get("themes", [])]
+    # IGDB "themes" is a ~12-value gameplay vocabulary (openworld, stealth,
+    # sandbox...), which says nothing about subject matter. "keywords" is where
+    # the thematic signal lives - medieval, dragons, post-apocalyptic - and it is
+    # what lets a game match a show or a novel on more than a broad genre.
+    labels += [k.get("name", "") for k in raw.get("keywords", [])][:MAX_KEYWORDS]
     genres, tags = split_genres_tags([label for label in labels if label])
     year = None
     if raw.get("first_release_date"):
@@ -81,7 +88,7 @@ def search(query: str, limit: int = 8) -> list[CatalogItem]:
         token = _cached_token(client)
         headers = {"Client-ID": settings.igdb_client_id, "Authorization": f"Bearer {token}"}
         body = (
-            f'search "{safe}"; fields name, summary, cover.url, genres.name, themes.name, '
+            f'search "{safe}"; fields name, summary, cover.url, genres.name, themes.name, keywords.name, '
             f"total_rating, total_rating_count, first_release_date; limit {limit};"
         )
         data = client.post(f"{BASE}/games", headers=headers, content=body).json()
@@ -96,7 +103,7 @@ def fetch_popular(limit: int = 100) -> list[CatalogItem]:
         token = _token(client)
         headers = {"Client-ID": settings.igdb_client_id, "Authorization": f"Bearer {token}"}
         body = (
-            "fields name, summary, cover.url, genres.name, themes.name, total_rating, "
+            "fields name, summary, cover.url, genres.name, themes.name, keywords.name, total_rating, "
             "total_rating_count, first_release_date; "
             f"sort total_rating_count desc; where total_rating_count > 50; limit {limit};"
         )

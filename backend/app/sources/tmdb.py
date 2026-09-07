@@ -6,6 +6,7 @@ unit-tested with a fixture; fetching hits the network.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -57,6 +58,48 @@ def normalize(raw: dict[str, Any], kind: str, genre_map: dict[int, str]) -> Cata
     )
 
 
+# TMDB's list/search endpoints return genre ids and nothing else, so movies and
+# TV arrived with zero theme tags while IGDB and Open Library supplied plenty.
+# That left the shared taste space lopsided: a TMDB title could only ever match
+# on broad genres like "action" (29% of the catalog), so generic blockbusters
+# outranked the title that actually shared its specific vibe. Keywords come from
+# a per-title endpoint, so they need their own fanned-out pass.
+MAX_TAGS = 12
+
+
+def fetch_keywords(client: httpx.Client, kind: str, tmdb_id: str) -> list[str]:
+    """Raw keyword labels for one title. Movies nest them under "keywords",
+    TV under "results" - same endpoint shape otherwise."""
+    data = _get(client, f"/{kind}/{tmdb_id}/keywords")
+    raw = data.get("keywords") if kind == "movie" else data.get("results")
+    return [k.get("name", "") for k in (raw or []) if k.get("name")]
+
+
+def enrich_keywords(items: list[CatalogItem], max_workers: int = 8) -> list[CatalogItem]:
+    """Attach TMDB keywords to `items` in place, concurrently. Best-effort: a
+    title whose lookup fails simply keeps the tags it already had."""
+    if not settings.tmdb_api_key or not items:
+        return items
+
+    def one(item: CatalogItem) -> None:
+        kind = "movie" if item.medium == "movie" else "tv"
+        with httpx.Client(timeout=15) as client:
+            labels = fetch_keywords(client, kind, item.source_id)
+        if not labels:
+            return
+        genres, tags = split_genres_tags(labels)
+        item.genres = list(dict.fromkeys([*item.genres, *genres]))
+        item.tags = list(dict.fromkeys([*item.tags, *tags]))[:MAX_TAGS]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for fut in [pool.submit(one, i) for i in items]:
+            try:
+                fut.result()
+            except Exception:
+                pass
+    return items
+
+
 _GENRE_CACHE: dict[str, dict[int, str]] | None = None
 
 
@@ -99,4 +142,4 @@ def fetch_popular(kind: str = "movie", pages: int = 2) -> list[CatalogItem]:
                 it = normalize(raw, kind, gmap)
                 if it:
                     items.append(it)
-    return items
+    return enrich_keywords(items)
