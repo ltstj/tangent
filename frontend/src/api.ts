@@ -35,14 +35,42 @@ export async function getShowcase(limit = 48): Promise<CatalogItem[]> {
   return res.json();
 }
 
+export interface GenreCount {
+  genre: string;
+  count: number;
+}
+
+export async function getGenres(): Promise<GenreCount[]> {
+  const res = await fetch(`${BASE}/api/genres`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export interface RecommendOptions {
+  targetMedia?: Medium[] | null;
+  /** Cold start: taste from genre names, when there are no favorites yet. */
+  seedGenres?: string[];
+  /** Restrict which results come back. Never affects their scores. */
+  filterGenres?: string[];
+  /** 0 = lean on tone (themes + synopsis meaning), 1 = lean on genre, 0.5 = default. */
+  genreWeight?: number;
+}
+
 export async function recommend(
   favoriteIds: string[],
-  targetMedia: Medium[] | null,
+  opts: RecommendOptions = {},
 ): Promise<Recommendation[]> {
   const res = await fetch(`${BASE}/api/recommend`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ favorite_ids: favoriteIds, target_media: targetMedia, limit: 12 }),
+    body: JSON.stringify({
+      favorite_ids: favoriteIds,
+      target_media: opts.targetMedia ?? null,
+      seed_genres: opts.seedGenres?.length ? opts.seedGenres : null,
+      filter_genres: opts.filterGenres?.length ? opts.filterGenres : null,
+      genre_weight: opts.genreWeight ?? null,
+      limit: 12,
+    }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
