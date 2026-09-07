@@ -128,37 +128,83 @@ class TasteModel:
             if v is not None and dim:
                 self.embed[i] = v
 
+    def _genre_seed(self, genres: list[str]) -> np.ndarray:
+        """A taste vector built from bare genre names, for cold start.
+
+        Someone with no favorites yet can still say "I like fantasy and
+        mystery"; that is a point in the same genre space a favorite would
+        occupy, just without tags or a synopsis behind it.
+        """
+        toks = [f"g:{g.strip().lower()}" for g in genres]
+        vec = np.zeros(len(self.genre_vocab), dtype=np.float32)
+        _fill_unit(vec, toks, self.genre_vocab, self.genre_idf)
+        return vec
+
     def recommend(
         self,
         favorite_ids: list[str],
         target_media: list[Medium] | None = None,
         limit: int = 12,
+        seed_genres: list[str] | None = None,
+        filter_genres: list[str] | None = None,
+        genre_weight: float | None = None,
     ) -> list[dict]:
+        """Rank the catalog against a taste.
+
+        seed_genres    - cold start: taste from genre names when there are no
+                         favorites yet (also blended in when there are).
+        filter_genres  - restrict results to items carrying any of these genres.
+                         A filter, not a preference: it never changes the score.
+        genre_weight   - the "genre versus tone" lever, 0..1. 0 leans entirely on
+                         tone (themes and synopsis meaning), 1 entirely on genre,
+                         and 0.5 is the tuned default. Implemented as a
+                         multiplier on the existing block weights, so the lever
+                         moves the same knobs the score is already built from.
+        """
         known = [fid for fid in favorite_ids if fid in self.index]
-        if not known:
+        seeds = [g for g in (seed_genres or []) if f"g:{g.strip().lower()}" in self.genre_vocab]
+        if not known and not seeds:
             return []
         rows = [self.index[fid] for fid in known]
 
+        g_mult, tone_mult = 1.0, 1.0
+        if genre_weight is not None:
+            gw = min(1.0, max(0.0, float(genre_weight)))
+            g_mult, tone_mult = 2.0 * gw, 2.0 * (1.0 - gw)
+
         # Taste = per-block average of the favorites, each block re-normalized so
         # one block's magnitude can't borrow weight from another.
-        g_taste = _unit(self.genres[rows].mean(axis=0))
-        t_taste = _unit(self.tags[rows].mean(axis=0))
-        r_taste = float(self.rating[rows].mean())
-        e_taste = float(self.era[rows].mean())
+        if rows:
+            g_taste = _unit(self.genres[rows].mean(axis=0))
+            t_taste = _unit(self.tags[rows].mean(axis=0))
+            r_taste = float(self.rating[rows].mean())
+            e_taste = float(self.era[rows].mean())
+        else:
+            # Cold start: no tags, no synopsis, no rating/era preference.
+            g_taste = np.zeros(len(self.genre_vocab), dtype=np.float32)
+            t_taste = np.zeros(len(self.tag_vocab), dtype=np.float32)
+            r_taste, e_taste = 0.7, 0.5   # nudge towards well-rated, era-neutral
+        if seeds:
+            g_taste = _unit(g_taste + self._genre_seed(seeds))
 
         scores = (
-            W_GENRE * (self.genres @ g_taste)
-            + W_TAG * (self.tags @ t_taste)
+            W_GENRE * g_mult * (self.genres @ g_taste)
+            + W_TAG * tone_mult * (self.tags @ t_taste)
             + W_RATING * (1.0 - np.abs(self.rating - r_taste))
             + W_ERA * (1.0 - np.abs(self.era - e_taste))
         )
-        if self.embed.shape[1]:
-            scores = scores + W_EMBED * (self.embed @ _unit(self.embed[rows].mean(axis=0)))
+        if self.embed.shape[1] and rows:
+            scores = scores + W_EMBED * tone_mult * (
+                self.embed @ _unit(self.embed[rows].mean(axis=0))
+            )
 
         fav_items = [self.items[r] for r in rows]
-        fav_genres = {g for it in fav_items for g in it.genres}
+        fav_genres = {g for it in fav_items for g in it.genres} | {
+            g.strip().lower() for g in seeds
+        }
         fav_tags = {t for it in fav_items for t in it.tags}
         exclude = set(known)
+        wanted = {g.strip().lower() for g in (filter_genres or [])}
 
         ranked = np.argsort(-scores)
         out: list[dict] = []
@@ -167,6 +213,8 @@ class TasteModel:
             if it.id in exclude:
                 continue
             if target_media and it.medium not in target_media:
+                continue
+            if wanted and not wanted.intersection(it.genres):
                 continue
             out.append({
                 "item": it,

@@ -122,3 +122,49 @@ def test_missing_embeddings_degrade_gracefully():
     model = TasteModel([a, b], {"movie:t:a": np.ones(4, dtype=np.float32) / 2})
     recs = model.recommend(["movie:t:a"], limit=5)
     assert recs and recs[0]["item"].id == "book:t:b"   # un-embedded item still ranks
+
+
+def test_cold_start_from_genres_alone(model):
+    """Someone with no favorites can still say what they like."""
+    recs = model.recommend([], seed_genres=["fantasy"], limit=5)
+    assert recs
+    assert any("fantasy" in r["item"].genres for r in recs)
+    # The seed shows up in the explanation, same as a favorite's genre would.
+    assert any("fantasy" in reason for r in recs for reason in r["reasons"])
+
+
+def test_cold_start_needs_a_usable_signal(model):
+    assert model.recommend([], limit=5) == []                        # nothing at all
+    assert model.recommend([], seed_genres=["notagenre"], limit=5) == []
+    assert model.recommend(["nope:0"], limit=5) == []                # unknown favorite
+
+
+def test_filter_genres_restricts_without_rescoring(model):
+    unfiltered = model.recommend(["movie:seed:bladerunner2049"], limit=20)
+    filtered = model.recommend(["movie:seed:bladerunner2049"], filter_genres=["rpg"], limit=20)
+    assert filtered, "expected at least one rpg in the seed catalog"
+    assert all("rpg" in r["item"].genres for r in filtered)
+    # A filter, not a preference: the scores it keeps are the scores it had.
+    before = {r["item"].id: r["score"] for r in unfiltered}
+    assert all(before[r["item"].id] == r["score"] for r in filtered if r["item"].id in before)
+
+
+def test_genre_weight_moves_between_genre_and_tone(model):
+    """The lever has to actually change the ranking, or it is decoration."""
+    all_genre = model.recommend(["tv:seed:got"], genre_weight=1.0, limit=8)
+    all_tone = model.recommend(["tv:seed:got"], genre_weight=0.0, limit=8)
+    assert [r["item"].id for r in all_genre] != [r["item"].id for r in all_tone]
+
+    # At the extremes the other block must contribute nothing. Two items sharing
+    # a genre but no tag should tie when the lever is pinned to genre.
+    from app.models import CatalogItem
+    from app.recommend import TasteModel
+
+    probe = CatalogItem(id="tv:t:p", medium="tv", title="P", genres=["scifi"], tags=["x"])
+    shares_tag = CatalogItem(id="game:t:a", medium="game", title="A", genres=["scifi"], tags=["x"])
+    no_tag = CatalogItem(id="game:t:b", medium="game", title="B", genres=["scifi"], tags=["y"])
+    m = TasteModel([probe, shares_tag, no_tag])
+    pinned = {r["item"].id: r["score"] for r in m.recommend(["tv:t:p"], genre_weight=1.0, limit=5)}
+    assert pinned["game:t:a"] == pinned["game:t:b"]
+    default = {r["item"].id: r["score"] for r in m.recommend(["tv:t:p"], limit=5)}
+    assert default["game:t:a"] > default["game:t:b"]

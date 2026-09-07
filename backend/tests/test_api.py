@@ -62,3 +62,26 @@ def test_recommend_rejects_unknown_ids(client):
 def test_item_lookup_and_404(client):
     assert client.get("/api/item/movie:seed:heat").json()["title"] == "Heat"
     assert client.get("/api/item/nope:0").status_code == 404
+
+
+def test_genres_endpoint_reports_only_present_genres(client):
+    rows = client.get("/api/genres").json()
+    assert rows and all(r["count"] > 0 for r in rows)
+    assert rows == sorted(rows, key=lambda r: (-r["count"], r["genre"]))
+    # Driven by the catalog, so nothing is offered that returns nothing.
+    recs = client.post("/api/recommend", json={"seed_genres": [rows[0]["genre"]], "limit": 3})
+    assert recs.status_code == 200 and recs.json()["results"]
+
+
+def test_recommend_requires_a_favorite_or_a_genre(client):
+    assert client.post("/api/recommend", json={}).status_code == 400
+    assert client.post("/api/recommend", json={"favorite_ids": ["nope:0"]}).status_code == 400
+
+
+def test_recommend_accepts_genre_controls(client):
+    r = client.post("/api/recommend", json={
+        "favorite_ids": ["movie:seed:bladerunner2049"],
+        "filter_genres": ["rpg"], "genre_weight": 0.8, "limit": 5,
+    })
+    assert r.status_code == 200
+    assert all("rpg" in x["item"]["genres"] for x in r.json()["results"])

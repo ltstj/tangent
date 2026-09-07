@@ -232,18 +232,54 @@ def showcase(limit: int = Query(48, ge=1, le=120)) -> list[CatalogItem]:
     return store.showcase(limit)
 
 
+@app.get("/api/genres")
+def genres(medium: Medium | None = None) -> list[dict[str, object]]:
+    """The unified genre vocabulary actually present in the catalog, with counts.
+
+    Driven by the data rather than taxonomy.UNIFIED_GENRES, so the UI never
+    offers a genre that would return nothing.
+    """
+    counts: dict[str, int] = {}
+    for item in get_model().items:
+        if medium and item.medium != medium:
+            continue
+        for g in item.genres:
+            counts[g] = counts.get(g, 0) + 1
+    return [{"genre": g, "count": n}
+            for g, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
 class RecommendRequest(BaseModel):
-    favorite_ids: list[str]
+    favorite_ids: list[str] = []
     target_media: list[Medium] | None = None  # None = any medium (incl. cross-media)
+    seed_genres: list[str] | None = None      # cold start: taste from genres alone
+    filter_genres: list[str] | None = None    # restrict results, never scores them
+    genre_weight: float | None = None         # 0 = all tone, 1 = all genre, 0.5 default
     limit: int = 12
 
 
 @app.post("/api/recommend")
 def recommend(req: RecommendRequest) -> dict[str, object]:
-    """Recommend from favorites. Set target_media to a single medium for
-    same-media recs, or a different one for the cross-media jump."""
+    """Recommend from favorites and/or chosen genres.
+
+    Set target_media to a single medium for same-media recs, or a different one
+    for the cross-media jump. With no favorites, seed_genres alone is enough -
+    that is the cold-start path for someone who has not picked anything yet.
+    """
     known = [fid for fid in req.favorite_ids if store.get(fid) is not None]
-    if not known:
+    if not known and not req.seed_genres:
+        raise HTTPException(
+            status_code=400,
+            detail="Give at least one known favorite_id or one seed genre.",
+        )
+    if req.favorite_ids and not known:
         raise HTTPException(status_code=400, detail="None of the favorite_ids are in the catalog.")
-    results = get_model().recommend(known, target_media=req.target_media, limit=req.limit)
+    results = get_model().recommend(
+        known,
+        target_media=req.target_media,
+        limit=req.limit,
+        seed_genres=req.seed_genres,
+        filter_genres=req.filter_genres,
+        genre_weight=req.genre_weight,
+    )
     return {"count": len(results), "results": results}
