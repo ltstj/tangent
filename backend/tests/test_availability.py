@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.availability import offers_for
 from app.models import CatalogItem
-from app.sources import cheapshark
+from app.sources import cheapshark, tmdb
 
 STORES = {"1": "Steam", "23": "GameBillet", "15": "Fanatical"}
 
@@ -74,6 +74,93 @@ def test_books_get_honest_links_and_never_a_price():
     assert all("Piranesi+%26+Co" in o.url for o in offers)   # title is URL-encoded
 
 
-def test_movies_return_nothing_rather_than_guessing():
+def test_a_movie_without_a_tmdb_id_returns_nothing_rather_than_guessing():
     movie = CatalogItem(id="movie:t:1", medium="movie", title="Whatever")
     assert offers_for(movie) == []
+
+
+PROVIDERS = {
+    "results": {
+        "US": {
+            "link": "https://www.themoviedb.org/movie/1/watch?locale=US",
+            "flatrate": [{"provider_name": "Paramount Plus", "display_priority": 2},
+                         {"provider_name": "fuboTV", "display_priority": 1},
+                         {"provider_name": "Paramount Plus", "display_priority": 9}],
+            "rent": [{"provider_name": "Amazon Video", "display_priority": 1}],
+            "buy": [{"provider_name": "Apple TV Store", "display_priority": 3}],
+            "ads": [{"provider_name": "Tubi", "display_priority": 4}],
+        },
+        "GB": {"link": "x", "flatrate": [{"provider_name": "Now TV", "display_priority": 1}]},
+    }
+}
+
+
+def test_providers_order_subscription_first_then_free_then_rent_then_buy():
+    offers = tmdb.normalize_providers(PROVIDERS, region="US")
+    # Two distinct subscriptions in the fixture, then one of each other kind.
+    assert [o.kind for o in offers] == [
+        "subscription", "subscription", "free", "rent", "buy",
+    ]
+    # Within a bucket TMDB's own display_priority decides.
+    assert offers[0].store == "fuboTV"
+
+
+def test_providers_never_carry_a_price_because_tmdb_publishes_none():
+    """Verified against the live API: provider objects have no price field at
+    all, so rent/buy say where, not how much."""
+    offers = tmdb.normalize_providers(PROVIDERS, region="US")
+    assert all(o.price is None for o in offers)
+    rent = next(o for o in offers if o.kind == "rent")
+    assert "not published" in rent.note
+
+
+def test_duplicate_channel_variants_collapse():
+    offers = tmdb.normalize_providers(PROVIDERS, region="US")
+    subs = [o.store for o in offers if o.kind == "subscription"]
+    assert subs.count("Paramount Plus") == 1
+
+
+def test_ads_supported_counts_as_free_but_says_so():
+    free = next(o for o in tmdb.normalize_providers(PROVIDERS, region="US") if o.kind == "free")
+    assert free.store == "Tubi" and free.note == "with ads"
+
+
+def test_region_selects_the_right_listing_and_missing_region_is_empty():
+    assert [o.store for o in tmdb.normalize_providers(PROVIDERS, region="GB")] == ["Now TV"]
+    assert tmdb.normalize_providers(PROVIDERS, region="JP") == []
+
+
+def test_reseller_channels_and_ad_tiers_collapse_to_one_row_per_service():
+    """TMDB's real payload for Reacher lists Amazon three times and, for Game of
+    Thrones, HBO Max twice. All are the same answer to "where can I watch this"."""
+    payload = {"results": {"US": {
+        "link": "x",
+        "flatrate": [
+            {"provider_name": "Amazon Prime Video", "display_priority": 1},
+            {"provider_name": "Amazon Prime Video with Ads", "display_priority": 2},
+            {"provider_name": "HBO Max", "display_priority": 3},
+            {"provider_name": "HBO Max Amazon Channel", "display_priority": 4},
+            {"provider_name": "Paramount+ Roku Premium Channel", "display_priority": 5},
+            {"provider_name": "Paramount Plus", "display_priority": 6},
+        ],
+        "ads": [{"provider_name": "Amazon Prime Video Free with Ads", "display_priority": 7}],
+    }}}
+    offers = tmdb.normalize_providers(payload, region="US", limit=20)
+    subs = [o.store for o in offers if o.kind == "subscription"]
+    # Note Paramount: TMDB ranked the Roku reseller above the service itself, and
+    # the plainer name still wins.
+    assert subs == ["Amazon Prime Video", "HBO Max", "Paramount Plus"]
+    # The ad-supported tier is a different kind, so it survives separately.
+    free = [o for o in offers if o.kind == "free"]
+    assert len(free) == 1 and free[0].note == "with ads"
+
+
+def test_genuinely_different_price_tiers_are_not_collapsed():
+    """Paramount Plus Premium and Essential cost different amounts; merging them
+    would hide a real choice."""
+    payload = {"results": {"US": {"link": "x", "flatrate": [
+        {"provider_name": "Paramount Plus Premium", "display_priority": 1},
+        {"provider_name": "Paramount Plus Essential", "display_priority": 2},
+    ]}}}
+    offers = tmdb.normalize_providers(payload, region="US")
+    assert len(offers) == 2

@@ -8,8 +8,9 @@ answer available:
   retail book prices across sellers, so this hands over search URLs - including
   "check your library" - rather than inventing numbers. ROADMAP.md is explicit
   about that: no scraping, no fabricated prices.
-- **movies/tv**: TMDB watch-providers, not wired up yet; returns nothing rather
-  than guessing.
+- **movies/tv**: TMDB watch-providers (JustWatch data) - which services carry
+  it, on subscription, rent or buy. TMDB publishes no prices, so these say
+  where and not how much. See tmdb.normalize_providers.
 
 A caller can always tell the difference: a priced offer has `price` set, a
 pointer has `kind == "link"` and `price is None`.
@@ -19,7 +20,7 @@ from __future__ import annotations
 from urllib.parse import quote_plus
 
 from .models import CatalogItem, Offer
-from .sources import cheapshark
+from .sources import cheapshark, tmdb
 
 
 def _book_links(item: CatalogItem) -> list[Offer]:
@@ -37,7 +38,7 @@ def _book_links(item: CatalogItem) -> list[Offer]:
             for store, url, note in links]
 
 
-def offers_for(item: CatalogItem, limit: int = 6) -> list[Offer]:
+def offers_for(item: CatalogItem, limit: int = 6, region: str = "US") -> list[Offer]:
     """Ways to get `item`, priced where we can source a price honestly."""
     if item.medium == "game":
         try:
@@ -46,4 +47,12 @@ def offers_for(item: CatalogItem, limit: int = 6) -> list[Offer]:
             return []   # a pricing outage must not break the page
     if item.medium == "book":
         return _book_links(item)
+    if item.medium in ("movie", "tv") and item.source == "tmdb":
+        try:
+            return tmdb.watch_providers(
+                "movie" if item.medium == "movie" else "tv",
+                item.source_id, region=region, limit=limit,
+            )
+        except Exception:
+            return []
     return []

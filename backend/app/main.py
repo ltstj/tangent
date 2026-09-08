@@ -223,20 +223,33 @@ def get_item(item_id: str) -> CatalogItem:
 
 
 @app.get("/api/offers/{item_id:path}")
-def offers(item_id: str, limit: int = Query(6, ge=1, le=20)) -> dict[str, object]:
+def offers(
+    item_id: str,
+    limit: int = Query(6, ge=1, le=20),
+    region: str = Query("US", min_length=2, max_length=2),
+) -> dict[str, object]:
     """Where to get one title. Prices where we can source them honestly, and
-    plain link-outs where we cannot - see availability.py."""
+    plain link-outs where we cannot - see availability.py.
+
+    `priced` tells the caller which it got, so the UI never has to infer whether
+    a missing price means "free" or "unknown". Streaming availability carries
+    JustWatch attribution, which TMDB's terms require.
+    """
     item = store.get(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Unknown item id.")
-    found = offers_for(item, limit=limit)
-    return {
+    found = offers_for(item, limit=limit, region=region)
+    body: dict[str, object] = {
         "item_id": item.id,
         "medium": item.medium,
         "title": item.title,
+        "region": region.upper(),
         "offers": found,
         "priced": any(o.price is not None for o in found),
     }
+    if item.medium in ("movie", "tv") and found:
+        body["attribution"] = tmdb.ATTRIBUTION
+    return body
 
 
 @app.get("/api/media")

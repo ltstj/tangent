@@ -6,13 +6,14 @@ unit-tested with a fixture; fetching hits the network.
 """
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
 
 from ..config import settings
-from ..models import CatalogItem
+from ..models import CatalogItem, Offer
 from ..taxonomy import split_genres_tags
 
 BASE = "https://api.themoviedb.org/3"
@@ -98,6 +99,103 @@ def enrich_keywords(items: list[CatalogItem], max_workers: int = 8) -> list[Cata
             except Exception:
                 pass
     return items
+
+
+# Watch providers. TMDB sources this from JustWatch and their terms require
+# attributing them, so ATTRIBUTION travels with the data rather than living in a
+# comment someone can drop.
+DEFAULT_REGION = "US"
+ATTRIBUTION = "Streaming availability from JustWatch, via TMDB."
+
+# What TMDB calls each bucket -> what it means for the caller. Note the thing
+# this cannot do: TMDB returns provider_id, provider_name, logo_path and
+# display_priority, and *no price field at all* - verified across three titles
+# and all 117 regions. So a rent or buy offer here says where, never how much.
+# "Cheapest subscription that has it" needs a maintained price table on our side;
+# inventing a number to fill the field would be worse than leaving it null.
+_BUCKETS: dict[str, tuple[str, str]] = {
+    "flatrate": ("subscription", ""),
+    "free": ("free", ""),
+    "ads": ("free", "with ads"),
+    "rent": ("rent", "price not published by TMDB"),
+    "buy": ("buy", "price not published by TMDB"),
+}
+
+
+# TMDB lists the same service several times: once directly, once per reseller
+# channel ("HBO Max" and "HBO Max Amazon Channel"), and once per ad tier
+# ("Amazon Prime Video" and "Amazon Prime Video with Ads"). All of those are the
+# same answer to "where can I watch this", so they collapse to one row. Tier
+# names that mean a genuinely different price - Paramount Plus Premium versus
+# Essential - are deliberately left alone.
+_CHANNEL_SUFFIXES = (
+    " amazon channel", " apple tv channel", " roku premium channel", " channel",
+)
+_ADS_SUFFIXES = (" free with ads", " with ads")
+
+
+def _store_key(name: str) -> str:
+    """Dedup key for a provider: the service, minus how you get to it."""
+    key = re.sub(r"\s+", " ", name.lower().replace("+", " plus")).strip()
+    for suffix in _ADS_SUFFIXES + _CHANNEL_SUFFIXES:
+        if key.endswith(suffix):
+            key = key[: -len(suffix)].strip()
+    return key
+
+
+def _has_ads(name: str) -> bool:
+    return "with ads" in name.lower()
+
+
+def normalize_providers(
+    payload: dict[str, Any], region: str = DEFAULT_REGION, limit: int = 8
+) -> list[Offer]:
+    """A /watch/providers response -> Offers for one region. Pure.
+
+    Subscriptions come first (that is the cheapest route if you already pay for
+    one), then free, then rent, then buy; within a bucket TMDB's own
+    display_priority decides, which roughly tracks how mainstream a provider is.
+    """
+    region_data = (payload.get("results") or {}).get(region.upper()) or {}
+    link = region_data.get("link") or ""
+    order = ["flatrate", "free", "ads", "rent", "buy"]
+    offers: list[Offer] = []
+    for bucket in order:
+        rows = region_data.get(bucket)
+        if not isinstance(rows, list):
+            continue
+        for row in sorted(rows, key=lambda r: r.get("display_priority", 999)):
+            name = row.get("provider_name")
+            if not name:
+                continue
+            kind, note = _BUCKETS[bucket]
+            if _has_ads(name) and not note:
+                note = "with ads"
+            offers.append(Offer(kind=kind, store=name, url=link, price=None, note=note))
+
+    # One row per service per kind, in display_priority order. Within a group
+    # show the plainest name: TMDB sometimes ranks a reseller above the service
+    # itself, and "HBO Max" is a better answer than "HBO Max Amazon Channel"
+    # even when TMDB lists the latter first. Shortest name is that name.
+    kept: dict[tuple[str, str], Offer] = {}
+    for offer in offers:
+        key = (offer.kind, _store_key(offer.store))
+        existing = kept.get(key)
+        if existing is None:
+            kept[key] = offer
+        elif len(offer.store) < len(existing.store):
+            existing.store = offer.store
+    return list(kept.values())[:limit]
+
+
+def watch_providers(kind: str, tmdb_id: str, region: str = DEFAULT_REGION,
+                    limit: int = 8) -> list[Offer]:
+    """Live lookup of where to watch one title. [] if no key or nothing listed."""
+    if not settings.tmdb_api_key or not tmdb_id:
+        return []
+    with httpx.Client(timeout=15) as client:
+        payload = _get(client, f"/{kind}/{tmdb_id}/watch/providers")
+    return normalize_providers(payload, region=region, limit=limit)
 
 
 _GENRE_CACHE: dict[str, dict[int, str]] | None = None
