@@ -164,3 +164,42 @@ select:focus { outline: none; border-color: #4f7cff; }
 .genres { color: #c3cee0; font-size: 0.8rem; margin: 0.2rem 0; text-transform: capitalize; }
 .why { color: #8fd6a8; font-size: 0.8rem; margin: 0.3rem 0; }
 .overview { color: #9fadc2; font-size: 0.82rem; margin: 0.5rem 0 0; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* --- Where to get it --- */
+.offers { margin-top: 0.7rem; border-top: 1px solid #23304a; padding-top: 0.55rem; }
+.offers-toggle {
+  border: 0; background: transparent; color: #8fb4ff; cursor: pointer;
+  font-size: 0.8rem; font-weight: 600; padding: 0; letter-spacing: 0.01em;
+}
+.offers-toggle:hover { color: #c9a3ff; }
+.offers-msg { font-size: 0.78rem; color: #7d8da6; margin: 0.45rem 0 0; }
+.offers-best {
+  font-size: 0.79rem; color: #8fd6a8; margin: 0.5rem 0 0.15rem;
+  background: rgba(143,214,168,0.08); border: 1px solid rgba(143,214,168,0.22);
+  border-radius: 8px; padding: 0.3rem 0.5rem;
+}
+.offers-best strong { color: #b6e8c6; }
+
+.offer-list { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.28rem; }
+.offer-list li { display: flex; align-items: center; gap: 0.45rem; font-size: 0.78rem; }
+.okind {
+  flex: none; min-width: 3.6rem; text-align: center; border-radius: 999px;
+  padding: 0.08rem 0.4rem; font-size: 0.68rem; font-weight: 650;
+  text-transform: uppercase; letter-spacing: 0.03em;
+  border: 1px solid #33425f; background: #16203a; color: #aebbcf;
+}
+/* Colour by how you pay, so the row is scannable without reading it. */
+.okind-subscription { border-color: #4f7cff; color: #b9cbff; background: rgba(79,124,255,0.14); }
+.okind-free { border-color: #3f8f63; color: #a6e0bd; background: rgba(63,143,99,0.16); }
+.okind-buy { border-color: #7a5cff; color: #cbbcff; background: rgba(122,92,255,0.14); }
+.okind-rent { border-color: #6a6f8f; color: #c3cee0; }
+.okind-link { border-style: dashed; }
+
+.ostore { flex: 1; min-width: 0; color: #dbe4f2; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ostore:hover { color: #fff; text-decoration: underline; }
+.oprice { flex: none; font-variant-numeric: tabular-nums; color: #e8edf4; font-weight: 650; }
+/* An em dash, not a blank: "we don't know" must not read as "free". */
+.oprice-unknown { color: #5f6f88; font-weight: 400; }
+.owas { margin-left: 0.3rem; color: #7d8da6; font-weight: 400; text-decoration: line-through; }
+.onote { flex: none; font-size: 0.68rem; color: #6b7c96; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.offers-attr { font-size: 0.66rem; color: #5f6f88; margin: 0.5rem 0 0; }

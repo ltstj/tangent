@@ -79,3 +79,38 @@ export async function recommend(
   const data = await res.json();
   return data.results as Recommendation[];
 }
+
+export type OfferKind = "buy" | "rent" | "subscription" | "free" | "link";
+
+export interface Offer {
+  kind: OfferKind;
+  store: string;
+  url: string;
+  price: number | null;
+  currency: string;
+  was: number | null;
+  note: string;
+}
+
+export interface OffersResponse {
+  item_id: string;
+  medium: Medium;
+  title: string;
+  region: string;
+  offers: Offer[];
+  /** True when at least one offer carries a real price. */
+  priced: boolean;
+  /** Absent means "we could not price one" — never "it isn't streaming anywhere". */
+  cheapest_subscription?: { store: string; price: number; currency: string };
+  /** TMDB's terms require showing this whenever streaming data is displayed. */
+  attribution?: string;
+}
+
+export async function getOffers(itemId: string, region = "US"): Promise<OffersResponse> {
+  const res = await fetch(`${BASE}/api/offers/${encodeURI(itemId)}?region=${region}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `offers failed: ${res.status}`);
+  }
+  return res.json();
+}

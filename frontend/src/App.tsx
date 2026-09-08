@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Offers from "./Offers";
 import PosterWall from "./PosterWall";
 import {
   getGenres,
@@ -319,6 +320,7 @@ export default function App() {
                 {r.item.genres.length > 0 && <p className="genres">{r.item.genres.join(", ")}</p>}
                 {r.reasons.length > 0 && <p className="why">{r.reasons.join(" · ")}</p>}
                 {r.item.overview && <p className="overview">{r.item.overview}</p>}
+                <Offers item={r.item} />
               </div>
             </article>
           ))}
