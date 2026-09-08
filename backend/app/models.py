@@ -12,6 +12,29 @@ from pydantic import BaseModel, Field
 
 Medium = Literal["movie", "tv", "game", "book"]
 
+# How you actually get hold of a title. "link" is an honest pointer with no price
+# attached - a bookshop or a ticket aggregator - and exists so books and theater
+# are never given invented numbers just to fill the field.
+OfferKind = Literal["buy", "rent", "subscription", "free", "link"]
+
+
+class Offer(BaseModel):
+    """One way to get one title, from one place."""
+
+    kind: OfferKind
+    store: str
+    url: str
+    price: float | None = None      # None for subscriptions and bare links
+    currency: str = "USD"
+    was: float | None = None        # list price, when this is a discount
+    note: str = ""                  # "historical low", "on Game Pass", ...
+
+    @property
+    def savings_pct(self) -> int | None:
+        if self.price is None or not self.was or self.was <= self.price:
+            return None
+        return round((self.was - self.price) / self.was * 100)
+
 
 class CatalogItem(BaseModel):
     id: str                       # stable "<medium>:<source>:<source_id>", e.g. "movie:tmdb:603"

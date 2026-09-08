@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .availability import offers_for
 from .config import settings
 from .models import CatalogItem, Medium
 from .recommend import TasteModel
@@ -219,6 +220,23 @@ def get_item(item_id: str) -> CatalogItem:
     if item is None:
         raise HTTPException(status_code=404, detail=f"Item '{item_id}' not found.")
     return item
+
+
+@app.get("/api/offers/{item_id:path}")
+def offers(item_id: str, limit: int = Query(6, ge=1, le=20)) -> dict[str, object]:
+    """Where to get one title. Prices where we can source them honestly, and
+    plain link-outs where we cannot - see availability.py."""
+    item = store.get(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Unknown item id.")
+    found = offers_for(item, limit=limit)
+    return {
+        "item_id": item.id,
+        "medium": item.medium,
+        "title": item.title,
+        "offers": found,
+        "priced": any(o.price is not None for o in found),
+    }
 
 
 @app.get("/api/media")

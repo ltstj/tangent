@@ -85,3 +85,17 @@ def test_recommend_accepts_genre_controls(client):
     })
     assert r.status_code == 200
     assert all("rpg" in x["item"]["genres"] for x in r.json()["results"])
+
+
+def test_offers_endpoint_for_a_book_is_links_only(client):
+    """Uses a book on purpose: no network, and it pins the "never invent a
+    price" contract."""
+    r = client.get("/api/offers/book:seed:neuromancer")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["priced"] is False
+    assert body["offers"] and all(o["price"] is None for o in body["offers"])
+
+
+def test_offers_endpoint_404s_on_an_unknown_item(client):
+    assert client.get("/api/offers/nope:0").status_code == 404
