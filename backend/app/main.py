@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from . import subscriptions
 from .availability import offers_for
 from .config import settings
 from .models import CatalogItem, Medium
@@ -238,7 +239,8 @@ def offers(
     item = store.get(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Unknown item id.")
-    found = offers_for(item, limit=limit, region=region)
+    rows = store.subscription_prices(region) if item.medium in ("movie", "tv") else None
+    found = offers_for(item, limit=limit, region=region, price_rows=rows)
     body: dict[str, object] = {
         "item_id": item.id,
         "medium": item.medium,
@@ -247,9 +249,36 @@ def offers(
         "offers": found,
         "priced": any(o.price is not None for o in found),
     }
+    best = subscriptions.cheapest(found)
+    if best is not None:
+        # None means "we can't price one", never "there isn't one" - the caller
+        # must not render an absence here as "not streaming anywhere".
+        body["cheapest_subscription"] = {
+            "store": best.store, "price": best.price, "currency": best.currency,
+        }
     if item.medium in ("movie", "tv") and found:
         body["attribution"] = tmdb.ATTRIBUTION
     return body
+
+
+@app.get("/api/subscriptions")
+def subscription_table(region: str = Query("US", min_length=2, max_length=2)) -> dict[str, object]:
+    """The subscription price table, including which rows are unusable and why.
+
+    Exposed so the staleness of this data is inspectable rather than implicit -
+    it is the one part of pricing that a human has to keep current.
+    """
+    rows = store.subscription_prices(region)
+    usable = subscriptions.usable_prices(rows)
+    return {
+        "region": region.upper(),
+        "stale_after_days": subscriptions.STALE_AFTER_DAYS,
+        "tracked": len(rows),
+        "usable": len(usable),
+        "services": [
+            {**r, "usable": r["service_key"] in usable} for r in rows
+        ],
+    }
 
 
 @app.get("/api/media")

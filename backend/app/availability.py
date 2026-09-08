@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from urllib.parse import quote_plus
 
+from . import subscriptions
 from .models import CatalogItem, Offer
 from .sources import cheapshark, tmdb
 
@@ -38,8 +39,17 @@ def _book_links(item: CatalogItem) -> list[Offer]:
             for store, url, note in links]
 
 
-def offers_for(item: CatalogItem, limit: int = 6, region: str = "US") -> list[Offer]:
-    """Ways to get `item`, priced where we can source a price honestly."""
+def offers_for(
+    item: CatalogItem,
+    limit: int = 6,
+    region: str = "US",
+    price_rows: list[dict] | None = None,
+) -> list[Offer]:
+    """Ways to get `item`, priced where we can source a price honestly.
+
+    `price_rows` is the subscription price table; passed in rather than fetched
+    here so this stays a pure dispatch and the caller controls the query.
+    """
     if item.medium == "game":
         try:
             return cheapshark.offers_for_title(item.title, limit=limit)
@@ -49,10 +59,13 @@ def offers_for(item: CatalogItem, limit: int = 6, region: str = "US") -> list[Of
         return _book_links(item)
     if item.medium in ("movie", "tv") and item.source == "tmdb":
         try:
-            return tmdb.watch_providers(
+            found = tmdb.watch_providers(
                 "movie" if item.medium == "movie" else "tv",
                 item.source_id, region=region, limit=limit,
             )
         except Exception:
             return []
+        if found and price_rows is not None:
+            subscriptions.annotate(found, price_rows)
+        return found
     return []

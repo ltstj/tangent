@@ -134,7 +134,7 @@ _CHANNEL_SUFFIXES = (
 _ADS_SUFFIXES = (" free with ads", " with ads")
 
 
-def _store_key(name: str) -> str:
+def store_key(name: str) -> str:
     """Dedup key for a provider: the service, minus how you get to it."""
     key = re.sub(r"\s+", " ", name.lower().replace("+", " plus")).strip()
     for suffix in _ADS_SUFFIXES + _CHANNEL_SUFFIXES:
@@ -179,7 +179,7 @@ def normalize_providers(
     # even when TMDB lists the latter first. Shortest name is that name.
     kept: dict[tuple[str, str], Offer] = {}
     for offer in offers:
-        key = (offer.kind, _store_key(offer.store))
+        key = (offer.kind, store_key(offer.store))
         existing = kept.get(key)
         if existing is None:
             kept[key] = offer

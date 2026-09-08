@@ -175,6 +175,31 @@ class CatalogStore:
             cur.execute(sql, params)
             return [_row_to_item(r) for r in cur.fetchall()]
 
+    def subscription_prices(self, region: str = "US") -> list[dict]:
+        """Every tracked service for a region, price included or NULL."""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT service_key, display_name, price, currency, period, "
+                "checked_on, source_url, note FROM subscription_prices "
+                "WHERE region = %s ORDER BY display_name",
+                (region.upper(),),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def set_subscription_price(
+        self, service_key: str, price: float | None, region: str = "US",
+        checked_on=None, note: str = "",
+    ) -> bool:
+        """Record a verified price. `checked_on` is what makes it usable - a
+        price with no date is treated as unknown, see subscriptions.py."""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE subscription_prices SET price = %s, checked_on = %s, note = %s "
+                "WHERE service_key = %s AND region = %s",
+                (price, checked_on, note, service_key, region.upper()),
+            )
+            return cur.rowcount > 0
+
     def delete_items(self, ids: list[str]) -> int:
         """Remove rows by id. Used to retire seed rows superseded by real ones."""
         if not ids:
@@ -236,6 +261,18 @@ class SqliteCatalogStore:
                 year INTEGER, rating REAL, popularity REAL, overview TEXT,
                 source TEXT, source_id TEXT, genres TEXT, tags TEXT, image TEXT,
                 embedding TEXT   -- JSON array; pgvector's column, minus pgvector
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_prices (
+                service_key TEXT NOT NULL, display_name TEXT NOT NULL,
+                region TEXT NOT NULL DEFAULT 'US', price REAL,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                period TEXT NOT NULL DEFAULT 'month',
+                checked_on TEXT, source_url TEXT, note TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (service_key, region)
             )
             """
         )
@@ -303,6 +340,29 @@ class SqliteCatalogStore:
             sql += " WHERE medium = ?"
             params = (medium,)
         return [_row_to_item(dict(r)) for r in self._conn.execute(sql, params).fetchall()]
+
+    def subscription_prices(self, region: str = "US") -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT service_key, display_name, price, currency, period, checked_on, "
+            "source_url, note FROM subscription_prices WHERE region = ? ORDER BY display_name",
+            (region.upper(),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_subscription_price(
+        self, service_key: str, price: float | None, region: str = "US",
+        checked_on=None, note: str = "",
+    ) -> bool:
+        cur = self._conn.execute(
+            "INSERT INTO subscription_prices (service_key, display_name, region, price, "
+            "checked_on, note) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(service_key, region) DO UPDATE SET price=excluded.price, "
+            "checked_on=excluded.checked_on, note=excluded.note",
+            (service_key, service_key, region.upper(), price,
+             str(checked_on) if checked_on else None, note),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def delete_items(self, ids: list[str]) -> int:
         if not ids:
