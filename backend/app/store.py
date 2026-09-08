@@ -81,6 +81,14 @@ class CatalogStore:
             # pgvector's type has to be registered per connection, or the
             # `embedding` column comes back as a string and writes fail.
             configure=register_vector,
+            # Test a connection before handing it out. Without this, a
+            # connection dropped while idle - Supabase timing it out, a network
+            # blip, an OS memory event - is served to whichever request asks
+            # next, which fails with a 500 before the pool notices and replaces
+            # it. Observed exactly that on 2026-09-06. Costs one round-trip per
+            # checkout, a few ms against the ~250ms a cross-network query
+            # already takes.
+            check=ConnectionPool.check_connection,
         )
         self._opened = False
 
