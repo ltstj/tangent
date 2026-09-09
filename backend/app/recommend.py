@@ -148,6 +148,8 @@ class TasteModel:
         seed_genres: list[str] | None = None,
         filter_genres: list[str] | None = None,
         genre_weight: float | None = None,
+        weights: dict[str, float] | None = None,
+        exclude_ids: set[str] | None = None,
     ) -> list[dict]:
         """Rank the catalog against a taste.
 
@@ -160,12 +162,32 @@ class TasteModel:
                          and 0.5 is the tuned default. Implemented as a
                          multiplier on the existing block weights, so the lever
                          moves the same knobs the score is already built from.
+        weights        - signed per-item pull from a user's library: positive
+                         moves the taste vector towards a title, negative away.
+                         See taste.weights_from_library.
+        exclude_ids    - never recommend these. Anything already in the library
+                         is a poor recommendation however well it scores.
         """
         known = [fid for fid in favorite_ids if fid in self.index]
         seeds = [g for g in (seed_genres or []) if f"g:{g.strip().lower()}" in self.genre_vocab]
-        if not known and not seeds:
+        # A signed weight per item: positive pulls the taste vector towards it,
+        # negative pushes away. Favorites are simply weight 1.0.
+        signed: dict[int, float] = {self.index[fid]: 1.0 for fid in known}
+        for item_id, w in (weights or {}).items():
+            row = self.index.get(item_id)
+            if row is not None:
+                signed[row] = signed.get(row, 0.0) + float(w)
+        if not signed and not seeds:
             return []
-        rows = [self.index[fid] for fid in known]
+        # Every weighted item contributes, negatives included - that is what
+        # makes a dislike push rather than merely be ignored.
+        rows = list(signed)
+        # ...unless nothing is liked at all. A vector built only from dislikes
+        # points away from everything, which ranks by anti-taste and is not a
+        # recommendation. In that case the categorical blocks sit this one out
+        # and the score falls back to rating/era, i.e. "we don't know you yet" -
+        # while the dislikes still count as exclusions.
+        liked = any(w > 0 for w in signed.values())
 
         g_mult, tone_mult = 1.0, 1.0
         if genre_weight is not None:
@@ -174,11 +196,17 @@ class TasteModel:
 
         # Taste = per-block average of the favorites, each block re-normalized so
         # one block's magnitude can't borrow weight from another.
-        if rows:
-            g_taste = _unit(self.genres[rows].mean(axis=0))
-            t_taste = _unit(self.tags[rows].mean(axis=0))
-            r_taste = float(self.rating[rows].mean())
-            e_taste = float(self.era[rows].mean())
+        if rows and liked:
+            w = np.array([signed.get(r, 1.0) for r in rows], dtype=np.float32)
+            g_taste = _unit(w @ self.genres[rows])
+            t_taste = _unit(w @ self.tags[rows])
+            # Rating and era describe *what you like*, so only liked items vote:
+            # a disliked title's release year is not a preference to move away
+            # from, and a negative weight here would skew both towards nonsense.
+            pos = np.clip(w, 0.0, None)
+            mass = float(pos.sum()) or 1.0
+            r_taste = float(pos @ self.rating[rows] / mass)
+            e_taste = float(pos @ self.era[rows] / mass)
         else:
             # Cold start: no tags, no synopsis, no rating/era preference.
             g_taste = np.zeros(len(self.genre_vocab), dtype=np.float32)
@@ -193,17 +221,18 @@ class TasteModel:
             + W_RATING * (1.0 - np.abs(self.rating - r_taste))
             + W_ERA * (1.0 - np.abs(self.era - e_taste))
         )
-        if self.embed.shape[1] and rows:
-            scores = scores + W_EMBED * tone_mult * (
-                self.embed @ _unit(self.embed[rows].mean(axis=0))
-            )
+        if self.embed.shape[1] and rows and liked:
+            w_e = np.array([signed.get(r, 1.0) for r in rows], dtype=np.float32)
+            scores = scores + W_EMBED * tone_mult * (self.embed @ _unit(w_e @ self.embed[rows]))
 
         fav_items = [self.items[r] for r in rows]
         fav_genres = {g for it in fav_items for g in it.genres} | {
             g.strip().lower() for g in seeds
         }
         fav_tags = {t for it in fav_items for t in it.tags}
-        exclude = set(known)
+        # Everything that shaped the taste is excluded, plus anything the caller
+        # named - a title already in your library is a poor recommendation.
+        exclude = {self.items[r].id for r in signed} | set(exclude_ids or set())
         wanted = {g.strip().lower() for g in (filter_genres or [])}
 
         ranked = np.argsort(-scores)

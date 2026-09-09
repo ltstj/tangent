@@ -16,7 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import subscriptions
-from .auth import User, current_user
+from . import taste
+from .auth import User, current_user, optional_user
 from .availability import availability_for
 from .config import settings
 from .models import CatalogItem, LibraryEntry, LibraryStatus, Medium
@@ -437,25 +438,38 @@ class RecommendRequest(BaseModel):
     seed_genres: list[str] | None = None      # cold start: taste from genres alone
     filter_genres: list[str] | None = None    # restrict results, never scores them
     genre_weight: float | None = None         # 0 = all tone, 1 = all genre, 0.5 default
+    use_library: bool = True                  # ignored when signed out
     limit: int = 12
 
 
 @app.post("/api/recommend")
-def recommend(req: RecommendRequest) -> dict[str, object]:
+def recommend(
+    req: RecommendRequest, user: User | None = Depends(optional_user)
+) -> dict[str, object]:
     """Recommend from favorites and/or chosen genres.
 
     Set target_media to a single medium for same-media recs, or a different one
     for the cross-media jump. With no favorites, seed_genres alone is enough -
     that is the cold-start path for someone who has not picked anything yet.
     """
-    known = [fid for fid in req.favorite_ids if store.get(fid) is not None]
-    if not known and not req.seed_genres:
+    known = [fid for fid in req.favorite_ids if _lookup_item(fid) is not None]
+
+    # A signed-in user's library is itself a statement of taste, so it counts
+    # even with no favorites typed in - and its titles are never recommended
+    # back to them.
+    weights: dict[str, float] = {}
+    if user is not None and req.use_library:
+        weights = taste.weights_from_library(store.library(user.id))
+
+    if not known and not req.seed_genres and not weights:
         raise HTTPException(
             status_code=400,
-            detail="Give at least one known favorite_id or one seed genre.",
+            detail="Give at least one known favorite_id, one seed genre, "
+                   "or sign in and mark something in your library.",
         )
     if req.favorite_ids and not known:
         raise HTTPException(status_code=400, detail="None of the favorite_ids are in the catalog.")
+
     results = get_model().recommend(
         known,
         target_media=req.target_media,
@@ -463,5 +477,12 @@ def recommend(req: RecommendRequest) -> dict[str, object]:
         seed_genres=req.seed_genres,
         filter_genres=req.filter_genres,
         genre_weight=req.genre_weight,
+        weights=weights,
     )
-    return {"count": len(results), "results": results}
+    return {
+        "count": len(results),
+        "results": results,
+        # Say whether the library shaped this, so the UI need not guess.
+        "personalized": bool(weights),
+        "library_signals": len(weights),
+    }

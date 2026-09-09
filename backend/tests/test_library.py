@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
-from app.auth import User, current_user
+from app.auth import User, current_user, optional_user
 from app.store import SqliteCatalogStore
 from app.seed import SEED_ITEMS
 
@@ -24,10 +24,15 @@ def _client_as(user: User | None) -> TestClient:
     main.store = SqliteCatalogStore(":memory:")
     main.store.upsert_items(SEED_ITEMS)
     main.refresh_model()
+    # Both dependencies must be overridden: /api/recommend takes optional_user
+    # and the library endpoints take current_user, and FastAPI keys overrides on
+    # the exact callable, so overriding one leaves the other reading real headers.
     if user is None:
         main.app.dependency_overrides.pop(current_user, None)
+        main.app.dependency_overrides[optional_user] = lambda: None
     else:
         main.app.dependency_overrides[current_user] = lambda: user
+        main.app.dependency_overrides[optional_user] = lambda: user
     return TestClient(main.app)
 
 
@@ -95,17 +100,20 @@ def test_one_user_cannot_see_or_touch_anothers_library():
     main.store = shared
     main.refresh_model()
     main.app.dependency_overrides[current_user] = lambda: ALICE
+    main.app.dependency_overrides[optional_user] = lambda: ALICE
     with TestClient(main.app) as c:
         c.put(f"/api/library/{ITEM}", json={"status": "finished", "rating": 10})
         assert len(c.get("/api/library").json()) == 1
 
     main.app.dependency_overrides[current_user] = lambda: BOB
+    main.app.dependency_overrides[optional_user] = lambda: BOB
     with TestClient(main.app) as c:
         assert c.get("/api/library").json() == []                  # cannot see it
         assert c.delete(f"/api/library/{ITEM}").json() == {"removed": False}
         assert c.delete("/api/me/data").json() == {"deleted_rows": 0}
 
     main.app.dependency_overrides[current_user] = lambda: ALICE
+    main.app.dependency_overrides[optional_user] = lambda: ALICE
     with TestClient(main.app) as c:
         entries = c.get("/api/library").json()
         assert len(entries) == 1 and entries[0]["rating"] == 10     # untouched by Bob
@@ -120,3 +128,70 @@ def test_library_requires_a_signed_in_user():
                      lambda: client.delete(f"/api/library/{ITEM}"),
                      lambda: client.delete("/api/me/data")):
             assert call().status_code == 401
+
+
+# --- library feedback shaping recommendations ---------------------------------
+
+def test_a_high_rating_pulls_and_a_low_one_pushes():
+    """ROADMAP: "likes pull, dislikes push". Same title, opposite ratings, and
+    the results must move apart."""
+    from app.recommend import TasteModel
+    from app.taste import weight_for
+
+    assert weight_for("finished", 10) == 1.0
+    assert weight_for("finished", 0) == -1.0
+    assert weight_for("finished", 5) == 0.0        # a shrug is not a signal
+    assert weight_for("want", None) > 0            # intent still counts
+
+    model = TasteModel(SEED_ITEMS)
+    liked = model.recommend([], weights={"tv:seed:got": 1.0}, target_media=["game"], limit=5)
+    disliked = model.recommend([], weights={"tv:seed:got": -1.0}, target_media=["game"], limit=5)
+    assert [r["item"].id for r in liked] != [r["item"].id for r in disliked]
+    # The fantasy game that matches Game of Thrones should not top a list built
+    # from disliking it.
+    assert liked[0]["item"].id == "game:seed:witcher3"
+    assert disliked[0]["item"].id != "game:seed:witcher3"
+
+
+def test_library_titles_are_never_recommended_back():
+    from app.recommend import TasteModel
+
+    model = TasteModel(SEED_ITEMS)
+    recs = model.recommend([], weights={"game:seed:witcher3": 1.0}, limit=20)
+    assert all(r["item"].id != "game:seed:witcher3" for r in recs)
+
+
+def test_a_rating_of_five_contributes_nothing():
+    from app.taste import weights_from_library
+
+    rows = [{"lib_item_id": "a", "lib_status": "finished", "lib_rating": 5.0},
+            {"lib_item_id": "b", "lib_status": "finished", "lib_rating": 9.0}]
+    assert weights_from_library(rows) == {"b": pytest.approx(0.8)}
+
+
+def test_only_dislikes_does_not_rank_by_anti_taste():
+    """A vector built solely from dislikes points away from everything, which is
+    not a recommendation. It must still return something sensible."""
+    from app.recommend import TasteModel
+
+    model = TasteModel(SEED_ITEMS)
+    recs = model.recommend([], weights={"tv:seed:got": -1.0}, limit=5)
+    assert recs and all(r["item"].id != "tv:seed:got" for r in recs)
+
+
+def test_recommend_reports_whether_the_library_shaped_it(alice):
+    alice.put(f"/api/library/{OTHER}", json={"status": "finished", "rating": 9})
+    body = alice.post("/api/recommend", json={"limit": 5}).json()
+    assert body["personalized"] is True and body["library_signals"] == 1
+    assert all(r["item"]["id"] != OTHER for r in body["results"])   # not fed back
+
+    plain = alice.post("/api/recommend", json={"limit": 5, "use_library": False}).json()
+    assert plain.get("personalized") is False or "detail" in plain
+
+
+def test_signed_out_recommend_still_needs_an_input():
+    c = _client_as(None)
+    with c as client:
+        assert client.post("/api/recommend", json={"limit": 5}).status_code == 400
+        ok = client.post("/api/recommend", json={"seed_genres": ["fantasy"], "limit": 3})
+        assert ok.status_code == 200 and ok.json()["personalized"] is False
