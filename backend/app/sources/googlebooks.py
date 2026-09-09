@@ -16,6 +16,7 @@ Two things to know:
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -25,30 +26,67 @@ from ..models import Offer
 
 BASE = "https://www.googleapis.com/books/v1/volumes"
 
+# Google returns matching volumes in a non-stable order, so a for-sale edition
+# can fall outside a short result window - "Foundation" matched at 40 results and
+# missed at 10 on identical queries. A wider window costs one request either way.
+MAX_RESULTS = 40
+
 
 def _norm(title: str) -> str:
     return "".join(ch for ch in title.lower() if ch.isalnum())
 
 
-def pick_volume(items: list[dict[str, Any]], title: str) -> dict[str, Any] | None:
-    """The for-sale volume whose title matches ours. Pure.
+def clean_title(title: str) -> str:
+    """Strip the packaging our catalog titles carry and Google's do not.
 
-    Requires an exact normalized title match: a search for one novel readily
-    returns study guides, summaries and box sets, and quoting one of those as
-    the book's price would be wrong.
+    Open Library records titles like "The Dark Forest (The Three-Body Problem
+    Series Book 2)"; Google has plain "The Dark Forest". Exact matching on the
+    raw string therefore missed books that are on sale.
     """
-    want = _norm(title)
+    out = re.sub(r"\s*[\(\[][^)\]]*[)\]]", "", title)
+    out = re.sub(r"\s*[:;-]\s*(a novel|a memoir|a story)\s*$", "", out, flags=re.I)
+    return out.strip() or title.strip()
+
+
+def _price_of(item: dict[str, Any]) -> float | None:
+    amount = ((item.get("saleInfo") or {}).get("retailPrice") or {}).get("amount")
+    try:
+        return float(amount) if amount is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def pick_volume(items: list[dict[str, Any]], title: str) -> dict[str, Any] | None:
+    """The cheapest for-sale volume whose title matches ours. Pure.
+
+    An exact normalized title match is required because a search for one novel
+    readily returns study guides, summaries and box sets, and quoting one of
+    those as the book's price would be wrong.
+
+    Cheapest rather than first, for two reasons. Google returns matching volumes
+    in an unstable order, so "first" made the price depend on luck - the same
+    query for "Artemis" returned Andy Weir's novel at $8.22 on one call and a
+    same-titled academic book at $47.19 on another. And when several distinct
+    works share a title, the cheapest is both the deterministic answer and the
+    honest one to "how much does this cost".
+    """
+    want = _norm(clean_title(title))
+    candidates = []
     for item in items:
         info = item.get("volumeInfo") or {}
         sale = item.get("saleInfo") or {}
-        if _norm(info.get("title", "")) != want:
+        # Both sides cleaned, so the comparison is symmetric.
+        if _norm(clean_title(info.get("title", ""))) != want:
             continue
         if sale.get("saleability") != "FOR_SALE":
             continue
-        if (sale.get("retailPrice") or {}).get("amount") is None:
+        price = _price_of(item)
+        if price is None:
             continue
-        return item
-    return None
+        candidates.append((price, item))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda pair: pair[0])[1]
 
 
 def normalize_volume(item: dict[str, Any]) -> Offer | None:
@@ -82,8 +120,8 @@ def ebook_offer(title: str, region: str = "US") -> Offer | None:
     if not settings.google_books_api_key or not title.strip():
         return None
     params = {
-        "q": f'intitle:"{title}"',
-        "maxResults": 10,
+        "q": f'intitle:"{clean_title(title)}"',
+        "maxResults": MAX_RESULTS,
         "country": region.upper(),
         "key": settings.google_books_api_key,
     }

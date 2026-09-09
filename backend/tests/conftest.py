@@ -8,6 +8,26 @@ from app.store import SqliteCatalogStore
 
 
 @pytest.fixture(autouse=True)
+def _no_external_keys(monkeypatch):
+    """Blank every external API key for the duration of the suite.
+
+    Tests are meant to be offline and deterministic, but any test exercising a
+    code path that reads a key would quietly start making real network calls the
+    moment a developer configured one - which is exactly what happened when
+    GOOGLE_BOOKS_API_KEY was set: a book test that asserted "link-outs only"
+    began fetching a live Play Books price and the suite runtime doubled.
+
+    A test that wants a keyed path should set the key itself, explicitly.
+    """
+    from app.config import settings
+
+    for field in ("google_books_api_key", "tmdb_api_key",
+                  "igdb_client_id", "igdb_client_secret"):
+        monkeypatch.setattr(settings, field, "")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_availability_cache():
     """Clear the offers cache around every test.
 

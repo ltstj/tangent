@@ -202,20 +202,15 @@ def test_ebook_pick_returns_none_when_nothing_qualifies():
     assert googlebooks.pick_volume([_volume("Other Book", 5.0)], "Neuromancer") is None
 
 
-def test_ebook_offer_is_skipped_without_a_key(monkeypatch):
+def test_ebook_offer_is_skipped_without_a_key():
     """No key means no price, rather than a half-working keyless request that
-    shares an exhausted global quota."""
-    from app.config import settings
+    shares an exhausted global quota. (The suite blanks keys; see conftest.)"""
     from app.sources import googlebooks
 
-    monkeypatch.setattr(settings, "google_books_api_key", "")
     assert googlebooks.ebook_offer("Neuromancer") is None
 
 
-def test_book_availability_says_how_to_enable_prices(monkeypatch):
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "google_books_api_key", "")
+def test_book_availability_says_how_to_enable_prices():
     book = CatalogItem(id="book:t:9", medium="book", title="Some Unique Title Here")
     result = availability_for(book, region="US")
     assert result.status == "ok"
@@ -291,3 +286,47 @@ def test_a_movie_without_a_tmdb_id_is_not_supported_not_empty():
     movie = CatalogItem(id="movie:t:noid", medium="movie", title="Whatever")
     result = av.availability_for(movie)
     assert result.status == "not_supported" and "TMDB id" in result.detail
+
+
+def test_ebook_title_cleaning_strips_catalog_packaging():
+    """Open Library records "The Dark Forest (The Three-Body Problem Series Book
+    2)" where Google has plain "The Dark Forest", so exact matching on the raw
+    string missed books that are genuinely on sale."""
+    from app.sources.googlebooks import clean_title
+
+    assert clean_title("The Dark Forest (The Three-Body Problem Series Book 2)") == "The Dark Forest"
+    assert clean_title("Gone Girl [Large Print]") == "Gone Girl"
+    assert clean_title("Piranesi: A Novel") == "Piranesi"
+    assert clean_title("Neuromancer") == "Neuromancer"
+    # Never clean a title away to nothing.
+    assert clean_title("(Untitled)") == "(Untitled)"
+
+
+def test_ebook_match_is_symmetric_across_cleaning():
+    from app.sources import googlebooks
+
+    items = [_volume("The Dark Forest", 1.99)]
+    picked = googlebooks.pick_volume(items, "The Dark Forest (Three-Body Problem Book 2)")
+    assert picked is not None and googlebooks.normalize_volume(picked).price == 1.99
+
+
+def test_not_for_sale_is_a_real_absence_not_a_matching_failure():
+    """Verified against the live API: every "Dune Messiah" volume is
+    NOT_FOR_SALE, so returning no price is correct rather than a miss."""
+    from app.sources import googlebooks
+
+    items = [_volume("Dune Messiah", None, saleability="NOT_FOR_SALE")]
+    assert googlebooks.pick_volume(items, "Dune Messiah") is None
+
+
+def test_ebook_picks_the_cheapest_matching_volume_not_the_first():
+    """Google returns matches in an unstable order, so "first" made the price
+    depend on luck: the same "Artemis" query gave Andy Weir's novel at $8.22 on
+    one call and a same-titled academic book at $47.19 on another."""
+    from app.sources import googlebooks
+
+    items = [_volume("Artemis", 47.19), _volume("Artemis", 8.22), _volume("Artemis", 9.59)]
+    assert googlebooks.normalize_volume(googlebooks.pick_volume(items, "Artemis")).price == 8.22
+    # Deterministic regardless of the order they arrive in.
+    assert googlebooks.normalize_volume(
+        googlebooks.pick_volume(list(reversed(items)), "Artemis")).price == 8.22
