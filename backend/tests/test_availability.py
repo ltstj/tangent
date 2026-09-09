@@ -235,7 +235,6 @@ def test_a_source_outage_is_reported_not_disguised_as_no_deals(monkeypatch):
         raise ConnectionError("down")
 
     monkeypatch.setattr(av.cheapshark, "offers_for_title", boom)
-    av._cache.clear()
     game = CatalogItem(id="game:t:out", medium="game", title="Some Game")
     result = av.availability_for(game)
     assert result.status == "source_unavailable"
@@ -246,7 +245,6 @@ def test_genuinely_empty_results_say_none_listed(monkeypatch):
     import app.availability as av
 
     monkeypatch.setattr(av.cheapshark, "offers_for_title", lambda *a, **k: ([], []))
-    av._cache.clear()
     game = CatalogItem(id="game:t:empty", medium="game", title="Obscure Game")
     result = av.availability_for(game)
     assert result.status == "none_listed" and result.offers == []
@@ -265,7 +263,6 @@ def test_failures_are_not_cached(monkeypatch):
         return ([Offer(kind="buy", store="Steam", url="u", price=1.0)], [])
 
     monkeypatch.setattr(av.cheapshark, "offers_for_title", flaky)
-    av._cache.clear()
     game = CatalogItem(id="game:t:flaky", medium="game", title="Flaky Game")
     assert av.availability_for(game).status == "source_unavailable"
     assert av.availability_for(game).status == "ok"        # retried, not cached
@@ -281,19 +278,16 @@ def test_game_prices_are_labelled_us_when_another_region_is_asked_for(monkeypatc
 
     monkeypatch.setattr(av.cheapshark, "offers_for_title",
                         lambda *a, **k: ([Offer(kind="buy", store="Steam", url="u", price=9.99)], []))
-    av._cache.clear()
     game = CatalogItem(id="game:t:reg", medium="game", title="Region Game")
     gb = av.availability_for(game, region="GB")
     assert gb.price_region == "US"
     assert any("USD" in n for n in gb.notes)
-    av._cache.clear()
     us = av.availability_for(game, region="US")
     assert not any("USD" in n for n in us.notes)   # no needless note at home
 
 
 def test_a_movie_without_a_tmdb_id_is_not_supported_not_empty():
     import app.availability as av
-    av._cache.clear()
     movie = CatalogItem(id="movie:t:noid", medium="movie", title="Whatever")
     result = av.availability_for(movie)
     assert result.status == "not_supported" and "TMDB id" in result.detail
