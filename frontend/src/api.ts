@@ -1,5 +1,19 @@
 // Tiny typed client for the Tangent API.
+import { accessToken } from "./supabase";
+
 const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+
+/**
+ * Attach the signed-in user's token when there is one.
+ *
+ * The API decides what a request may see from this token alone — it never
+ * trusts a user id sent in a body or query — so an absent token simply means
+ * "signed out", not "unauthorized".
+ */
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await accessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export type Medium = "movie" | "tv" | "game" | "book";
 
@@ -19,6 +33,13 @@ export interface Recommendation {
   item: CatalogItem;
   score: number;
   reasons: string[];
+}
+
+export interface RecommendResult {
+  results: Recommendation[];
+  /** True when the caller's library shaped these. */
+  personalized: boolean;
+  library_signals: number;
 }
 
 export async function searchTitles(q: string, medium?: Medium): Promise<CatalogItem[]> {
@@ -59,10 +80,12 @@ export interface RecommendOptions {
 export async function recommend(
   favoriteIds: string[],
   opts: RecommendOptions = {},
-): Promise<Recommendation[]> {
+): Promise<RecommendResult> {
   const res = await fetch(`${BASE}/api/recommend`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // With a token the API folds the caller's library into the taste vector and
+    // filters out what they have already seen.
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify({
       favorite_ids: favoriteIds,
       target_media: opts.targetMedia ?? null,
@@ -77,7 +100,11 @@ export async function recommend(
     throw new Error(body.detail ?? `recommend failed: ${res.status}`);
   }
   const data = await res.json();
-  return data.results as Recommendation[];
+  return {
+    results: (data.results ?? []) as Recommendation[],
+    personalized: Boolean(data.personalized),
+    library_signals: Number(data.library_signals ?? 0),
+  };
 }
 
 export type OfferKind = "buy" | "rent" | "subscription" | "free" | "link";
@@ -131,4 +158,55 @@ export async function getOffers(itemId: string, region = "US"): Promise<OffersRe
     throw new Error(body.detail ?? `offers failed: ${res.status}`);
   }
   return res.json();
+}
+
+export type LibraryStatus = "want" | "in_progress" | "finished";
+
+export interface LibraryEntry {
+  item: CatalogItem;
+  status: LibraryStatus;
+  rating: number | null;
+  note: string;
+  updated_at: string | null;
+}
+
+export async function getLibrary(): Promise<LibraryEntry[]> {
+  const res = await fetch(`${BASE}/api/library`, { headers: await authHeaders() });
+  if (res.status === 401) return [];
+  if (!res.ok) throw new Error(`library failed: ${res.status}`);
+  return res.json();
+}
+
+export async function setLibraryEntry(
+  itemId: string,
+  status: LibraryStatus,
+  rating: number | null = null,
+): Promise<LibraryEntry> {
+  const res = await fetch(`${BASE}/api/library/${encodeURI(itemId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ status, rating, note: "" }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `save failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function removeLibraryEntry(itemId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/library/${encodeURI(itemId)}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`remove failed: ${res.status}`);
+}
+
+export async function deleteMyData(): Promise<number> {
+  const res = await fetch(`${BASE}/api/me/data`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+  return (await res.json()).deleted_rows ?? 0;
 }

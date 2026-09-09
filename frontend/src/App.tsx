@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import Auth from "./Auth";
+import LibraryControls from "./LibraryControls";
 import Offers from "./Offers";
 import PosterWall from "./PosterWall";
+import { supabase } from "./supabase";
 import {
   getGenres,
+  getLibrary,
   recommend,
   searchTitles,
   type CatalogItem,
   type GenreCount,
+  type LibraryEntry,
   type Medium,
   type Recommendation,
 } from "./api";
@@ -32,6 +38,10 @@ export default function App() {
   // centred and only departs from the default when someone moves it.
   const [genreWeight, setGenreWeight] = useState(0.5);
 
+  const [session, setSession] = useState<Session | null>(null);
+  const [library, setLibrary] = useState<LibraryEntry[]>([]);
+  const [personalized, setPersonalized] = useState(false);
+
   const [active, setActive] = useState(-1); // keyboard cursor in the suggestion list
   const debounce = useRef<number | undefined>(undefined);
   const reqSeq = useRef(0); // guards against out-of-order responses
@@ -44,6 +54,23 @@ export default function App() {
   useEffect(() => {
     getGenres().then(setAllGenres).catch(() => setAllGenres([]));
   }, []);
+
+  // Track the session, and reload the library whenever it changes: signing out
+  // must not leave the previous account's entries on screen.
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, next) => setSession(next));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
+      setLibrary([]);
+      return;
+    }
+    getLibrary().then(setLibrary).catch(() => setLibrary([]));
+  }, [session]);
 
   // Search-as-you-type (debounced). Live source lookups make this a real request,
   // so wait a beat and require a couple of characters.
@@ -106,20 +133,20 @@ export default function App() {
     }
   }
 
-  const canRecommend = favorites.length > 0 || picked.length > 0;
+  const canRecommend = favorites.length > 0 || picked.length > 0 || library.length > 0;
 
   async function getRecommendations() {
     setError(null);
     setLoading(true);
     try {
-      setResults(
-        await recommend(favorites.map((f) => f.id), {
-          targetMedia: target === "any" ? null : [target],
-          seedGenres: genresAreSeed ? picked : undefined,
-          filterGenres: genresAreSeed ? undefined : picked,
-          genreWeight,
-        }),
-      );
+      const res = await recommend(favorites.map((f) => f.id), {
+        targetMedia: target === "any" ? null : [target],
+        seedGenres: genresAreSeed ? picked : undefined,
+        filterGenres: genresAreSeed ? undefined : picked,
+        genreWeight,
+      });
+      setResults(res.results);
+      setPersonalized(res.personalized);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setResults([]);
@@ -140,6 +167,9 @@ export default function App() {
         <header>
           <h1>Tangent</h1>
           <p className="tag">Find your next favorite across movies, TV, games, and books.</p>
+          <Auth session={session} onChange={() => {
+            if (supabase) supabase.auth.getSession().then(({ data }) => setSession(data.session));
+          }} />
         </header>
 
         <section className="panel">
@@ -294,10 +324,20 @@ export default function App() {
           {!canRecommend && (
             <p className="nudge">Add a favorite above, or pick a genre to start from.</p>
           )}
+          {library.length > 0 && (
+            <p className="nudge">
+              Your library has {library.length}{" "}
+              {library.length === 1 ? "title" : "titles"} — recommendations use it
+              and skip what you have already marked.
+            </p>
+          )}
           {error && <p className="error">{error}</p>}
         </section>
 
         <section className="results">
+          {personalized && results.length > 0 && (
+            <p className="personal-note">Shaped by your library.</p>
+          )}
           {results.map((r) => (
             <article key={r.item.id} className="card">
               {r.item.image ? (
@@ -320,6 +360,18 @@ export default function App() {
                 {r.item.genres.length > 0 && <p className="genres">{r.item.genres.join(", ")}</p>}
                 {r.reasons.length > 0 && <p className="why">{r.reasons.join(" · ")}</p>}
                 {r.item.overview && <p className="overview">{r.item.overview}</p>}
+                {session && (
+                  <LibraryControls
+                    item={r.item}
+                    entry={library.find((e) => e.item.id === r.item.id)}
+                    onChange={(entry) =>
+                      setLibrary((prev) => {
+                        const rest = prev.filter((e) => e.item.id !== r.item.id);
+                        return entry ? [entry, ...rest] : rest;
+                      })
+                    }
+                  />
+                )}
                 <Offers item={r.item} />
               </div>
             </article>
