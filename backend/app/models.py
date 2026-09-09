@@ -18,6 +18,18 @@ Medium = Literal["movie", "tv", "game", "book"]
 OfferKind = Literal["buy", "rent", "subscription", "free", "link"]
 
 
+# Why a status and not just an empty list: "we could not reach the price source"
+# and "this genuinely has no offers" are different facts, and a UI that renders
+# them identically tells the reader something we do not know. Same reasoning as
+# `cheapest_subscription` being absent rather than zero.
+AvailabilityStatus = Literal[
+    "ok",                  # offers found
+    "none_listed",         # source answered, nothing available
+    "source_unavailable",  # we could not ask; say so rather than imply absence
+    "not_supported",       # we have no source for this medium/item yet
+]
+
+
 class Offer(BaseModel):
     """One way to get one title, from one place."""
 
@@ -34,6 +46,16 @@ class Offer(BaseModel):
         if self.price is None or not self.was or self.was <= self.price:
             return None
         return round((self.was - self.price) / self.was * 100)
+
+
+class Availability(BaseModel):
+    """Everything we know about getting hold of one title."""
+
+    offers: list[Offer] = Field(default_factory=list)
+    status: AvailabilityStatus = "ok"
+    detail: str = ""            # why, when status is not "ok"
+    price_region: str | None = None   # the region these prices actually apply to
+    notes: list[str] = Field(default_factory=list)  # e.g. a cheaper edition
 
 
 class CatalogItem(BaseModel):

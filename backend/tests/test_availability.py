@@ -1,8 +1,8 @@
 """Offer normalization is pure and unit-tested with fixture payloads (no network)."""
 from __future__ import annotations
 
-from app.availability import offers_for
-from app.models import CatalogItem
+from app.availability import availability_for, offers_for
+from app.models import CatalogItem, Offer
 from app.sources import cheapshark, tmdb
 
 STORES = {"1": "Steam", "23": "GameBillet", "15": "Fanatical"}
@@ -164,3 +164,136 @@ def test_genuinely_different_price_tiers_are_not_collapsed():
     ]}}}
     offers = tmdb.normalize_providers(payload, region="US")
     assert len(offers) == 2
+
+
+# --- Google Books ebook prices -------------------------------------------------
+
+def _volume(title, price, saleability="FOR_SALE", listed=None):
+    sale = {"saleability": saleability, "buyLink": "https://play.google.com/x"}
+    if price is not None:
+        sale["retailPrice"] = {"amount": price, "currencyCode": "USD"}
+    if listed is not None:
+        sale["listPrice"] = {"amount": listed, "currencyCode": "USD"}
+    return {"volumeInfo": {"title": title}, "saleInfo": sale}
+
+
+def test_ebook_pick_requires_an_exact_title_and_a_real_sale():
+    """A book search returns study guides and summaries; quoting one of those as
+    the book's price would be wrong."""
+    from app.sources import googlebooks
+
+    items = [
+        _volume("Neuromancer: A Study Guide", 4.99),
+        _volume("Neuromancer", None),                          # for sale, no price
+        _volume("Neuromancer", 9.99, saleability="NOT_FOR_SALE"),
+        _volume("Neuromancer", 8.99, listed=12.99),            # the one we want
+    ]
+    picked = googlebooks.pick_volume(items, "Neuromancer")
+    offer = googlebooks.normalize_volume(picked)
+    assert offer.price == 8.99 and offer.was == 12.99
+    assert offer.kind == "buy" and offer.note == "ebook"
+    assert offer.store == "Google Play Books"
+
+
+def test_ebook_pick_returns_none_when_nothing_qualifies():
+    from app.sources import googlebooks
+
+    assert googlebooks.pick_volume([], "Anything") is None
+    assert googlebooks.pick_volume([_volume("Other Book", 5.0)], "Neuromancer") is None
+
+
+def test_ebook_offer_is_skipped_without_a_key(monkeypatch):
+    """No key means no price, rather than a half-working keyless request that
+    shares an exhausted global quota."""
+    from app.config import settings
+    from app.sources import googlebooks
+
+    monkeypatch.setattr(settings, "google_books_api_key", "")
+    assert googlebooks.ebook_offer("Neuromancer") is None
+
+
+def test_book_availability_says_how_to_enable_prices(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "google_books_api_key", "")
+    book = CatalogItem(id="book:t:9", medium="book", title="Some Unique Title Here")
+    result = availability_for(book, region="US")
+    assert result.status == "ok"
+    assert all(o.price is None for o in result.offers)
+    assert any("GOOGLE_BOOKS_API_KEY" in n for n in result.notes)
+
+
+# --- status: "we could not ask" is not "there is nothing" ----------------------
+
+def test_a_source_outage_is_reported_not_disguised_as_no_deals(monkeypatch):
+    """The defect this replaced: `except Exception: return []` made a CheapShark
+    outage produce the same output as a game genuinely having no deals, and the
+    UI then told the reader "no prices available" - a claim we hadn't earned."""
+    import app.availability as av
+
+    def boom(*a, **k):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(av.cheapshark, "offers_for_title", boom)
+    av._cache.clear()
+    game = CatalogItem(id="game:t:out", medium="game", title="Some Game")
+    result = av.availability_for(game)
+    assert result.status == "source_unavailable"
+    assert result.offers == [] and "CheapShark" in result.detail
+
+
+def test_genuinely_empty_results_say_none_listed(monkeypatch):
+    import app.availability as av
+
+    monkeypatch.setattr(av.cheapshark, "offers_for_title", lambda *a, **k: ([], []))
+    av._cache.clear()
+    game = CatalogItem(id="game:t:empty", medium="game", title="Obscure Game")
+    result = av.availability_for(game)
+    assert result.status == "none_listed" and result.offers == []
+
+
+def test_failures_are_not_cached(monkeypatch):
+    """A transient outage must not pin "unavailable" for the whole TTL."""
+    import app.availability as av
+
+    calls = {"n": 0}
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("down")
+        return ([Offer(kind="buy", store="Steam", url="u", price=1.0)], [])
+
+    monkeypatch.setattr(av.cheapshark, "offers_for_title", flaky)
+    av._cache.clear()
+    game = CatalogItem(id="game:t:flaky", medium="game", title="Flaky Game")
+    assert av.availability_for(game).status == "source_unavailable"
+    assert av.availability_for(game).status == "ok"        # retried, not cached
+    assert av.availability_for(game).status == "ok"        # now cached
+    assert calls["n"] == 2
+
+
+def test_game_prices_are_labelled_us_when_another_region_is_asked_for(monkeypatch):
+    """CheapShark ignores every region parameter, so presenting its prices as
+    local would be a lie. Verified against the live API: country, region,
+    currency and cc all return identical USD prices."""
+    import app.availability as av
+
+    monkeypatch.setattr(av.cheapshark, "offers_for_title",
+                        lambda *a, **k: ([Offer(kind="buy", store="Steam", url="u", price=9.99)], []))
+    av._cache.clear()
+    game = CatalogItem(id="game:t:reg", medium="game", title="Region Game")
+    gb = av.availability_for(game, region="GB")
+    assert gb.price_region == "US"
+    assert any("USD" in n for n in gb.notes)
+    av._cache.clear()
+    us = av.availability_for(game, region="US")
+    assert not any("USD" in n for n in us.notes)   # no needless note at home
+
+
+def test_a_movie_without_a_tmdb_id_is_not_supported_not_empty():
+    import app.availability as av
+    av._cache.clear()
+    movie = CatalogItem(id="movie:t:noid", medium="movie", title="Whatever")
+    result = av.availability_for(movie)
+    assert result.status == "not_supported" and "TMDB id" in result.detail

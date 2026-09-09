@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import subscriptions
-from .availability import offers_for
+from .availability import availability_for
 from .config import settings
 from .models import CatalogItem, Medium
 from .recommend import TasteModel
@@ -44,8 +44,56 @@ app.add_middleware(
 store = CatalogStore()
 _model: TasteModel | None = None
 _items: list[CatalogItem] | None = None
+_item_index: dict[str, CatalogItem] | None = None
 _embeddings: dict | None = None
 _model_lock = Lock()
+
+# The subscription table changes only when a human records a price, so re-reading
+# it per request bought nothing and cost a network round-trip. Short TTL so an
+# entry made by scripts/set_subscription_price shows up promptly anyway.
+_PRICE_TTL_S = 60.0
+_price_cache: dict[str, tuple[float, list[dict]]] = {}
+_price_lock = Lock()
+
+
+def _lookup_item(item_id: str) -> CatalogItem | None:
+    """Find an item without a network round-trip when we already hold it.
+
+    The catalog is already in memory for the recommender, so hitting Postgres
+    again to resolve an id the model is holding was pure latency - it dominated
+    the offers endpoint once its own results were cached.
+    """
+    global _item_index
+    with _model_lock:
+        if _item_index is None:
+            # Seed from the recommender's catalog if it is already loaded;
+            # otherwise start empty and fill in as ids are asked for. The offers
+            # panel asks for the same handful of ids repeatedly, so memoizing
+            # single lookups is enough - no need to pull the whole catalog just
+            # to resolve one id.
+            _item_index = {i.id: i for i in _items} if _items else {}
+        hit = _item_index.get(item_id)
+    if hit is not None:
+        return hit
+    found = store.get(item_id)
+    if found is not None:
+        with _model_lock:
+            if _item_index is not None:
+                _item_index[item_id] = found
+    return found
+
+
+def _price_rows(region: str) -> list[dict]:
+    key = region.upper()
+    now = time.monotonic()
+    with _price_lock:
+        hit = _price_cache.get(key)
+        if hit and now < hit[0]:
+            return hit[1]
+    rows = store.subscription_prices(key)
+    with _price_lock:
+        _price_cache[key] = (now + _PRICE_TTL_S, rows)
+    return rows
 
 
 def get_model() -> TasteModel:
@@ -69,16 +117,19 @@ def refresh_model(added: list[CatalogItem] | None = None) -> None:
     which, on the autocomplete path, is worse than the live source lookup it was
     meant to complement. With no argument the next build reloads in full.
     """
-    global _model, _items, _embeddings
+    global _model, _items, _item_index, _embeddings
     with _model_lock:
         _model = None
+        _item_index = None
         if added is None or _items is None:
             _items = None
+            _item_index = None
             _embeddings = None
             return
         merged = {it.id: it for it in _items}
         merged.update({it.id: it for it in added})
         _items = list(merged.values())
+        _item_index = merged
 
 
 @app.get("/health")
@@ -236,11 +287,12 @@ def offers(
     a missing price means "free" or "unknown". Streaming availability carries
     JustWatch attribution, which TMDB's terms require.
     """
-    item = store.get(item_id)
+    item = _lookup_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Unknown item id.")
-    rows = store.subscription_prices(region) if item.medium in ("movie", "tv") else None
-    found = offers_for(item, limit=limit, region=region, price_rows=rows)
+    rows = _price_rows(region) if item.medium in ("movie", "tv") else None
+    result = availability_for(item, limit=limit, region=region, price_rows=rows)
+    found = result.offers
     body: dict[str, object] = {
         "item_id": item.id,
         "medium": item.medium,
@@ -248,6 +300,11 @@ def offers(
         "region": region.upper(),
         "offers": found,
         "priced": any(o.price is not None for o in found),
+        # status distinguishes "nothing available" from "we could not ask".
+        "status": result.status,
+        "detail": result.detail,
+        "price_region": result.price_region,
+        "notes": result.notes,
     }
     best = subscriptions.cheapest(found)
     if best is not None:

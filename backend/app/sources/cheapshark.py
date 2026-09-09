@@ -26,6 +26,10 @@ import httpx
 from ..models import Offer
 
 BASE = "https://www.cheapshark.com/api/1.0"
+# CheapShark has no regional support: country, region, currency and cc are all
+# ignored and /stores carries no region field. Everything it returns is USD from
+# US storefronts, so callers must label it rather than imply local pricing.
+PRICE_REGION = "US"
 # Identifies us and gives them a way to reach a human, without sending anyone's
 # email address to a third-party service.
 USER_AGENT = "Tangent/0.1 (+https://github.com/ltstj/tangent)"
@@ -123,16 +127,78 @@ def normalize_deals(
     return offers[:limit]
 
 
-def offers_for_title(title: str, limit: int = 6) -> list[Offer]:
-    """Live lookup: search by title, then fetch that game's deals. [] on any miss."""
+# An edition is a different way to buy the same game. DLC is not: "The Witcher
+# 3 - Hearts of Stone" at $9.99 is an expansion that *requires* the base game, so
+# offering it as a cheaper alternative would be plainly wrong. A title search
+# returns both, so candidates must carry an actual edition marker - a whitelist,
+# because guessing which unmarked subtitles are DLC is the mistake this avoids.
+_EDITION_MARKERS = (
+    "complete edition", "definitive edition", "deluxe edition", "ultimate edition",
+    "gold edition", "enhanced edition", "anniversary edition", "special edition",
+    "game of the year", "goty", "remastered", "collection", "royal edition",
+)
+
+
+def cheaper_edition(rows: list[dict[str, Any]], match: dict[str, Any]) -> dict[str, Any] | None:
+    """A cheaper *edition* of the game we matched, or None.
+
+    The title search already returns every edition with its cheapest price, so
+    this is free information we were otherwise discarding - and it is often the
+    most useful line on the panel: The Witcher 3 base game is $39.99 while its
+    Complete Edition is $24.99, which is cheaper *and* more content. Pure.
+    """
+    try:
+        ours = float(match.get("cheapest"))
+    except (TypeError, ValueError):
+        return None
+    ours_key = _norm(match.get("external", ""))
+    best: dict[str, Any] | None = None
+    for row in rows:
+        if row.get("gameID") == match.get("gameID"):
+            continue
+        title = row.get("external", "")
+        low = title.lower()
+        marker = next((m for m in _EDITION_MARKERS if m in low), None)
+        if marker is None:
+            continue
+        # Strict: the candidate must be *our* title plus an edition suffix and
+        # nothing else. Containment is not enough - "ELDEN RING NIGHTREIGN
+        # Deluxe Edition" contains "Elden Ring" but is a different game, and
+        # offering it as a cheaper edition would be wrong.
+        if _norm(low.replace(marker, "")) != ours_key:
+            continue
+        try:
+            price = float(row.get("cheapest"))
+        except (TypeError, ValueError):
+            continue
+        if price < ours and (best is None or price < float(best["cheapest"])):
+            best = row
+    return best
+
+
+def offers_for_title(title: str, limit: int = 6) -> tuple[list[Offer], list[str]]:
+    """Live lookup: search by title, then fetch that game's deals.
+
+    Returns (offers, notes). Raises on transport failure so the caller can tell
+    an outage from a genuine absence - swallowing that made a CheapShark outage
+    look identical to a game having no deals.
+    """
     if not title.strip():
-        return []
+        return [], []
     with _client() as client:
         rows = client.get(f"{BASE}/games", params={"title": title, "limit": 12}).json()
         if not isinstance(rows, list):
-            return []
+            return [], []
         match = pick_game(rows, title)
         if not match or not match.get("gameID"):
-            return []
+            return [], []
         payload = client.get(f"{BASE}/games", params={"id": match["gameID"]}).json()
-        return normalize_deals(payload, stores(client), limit=limit)
+        offers = normalize_deals(payload, stores(client), limit=limit)
+
+        notes: list[str] = []
+        alt = cheaper_edition(rows, match)
+        if alt:
+            notes.append(
+                f"{alt['external']} is cheaper at ${float(alt['cheapest']):.2f}"
+            )
+        return offers, notes
