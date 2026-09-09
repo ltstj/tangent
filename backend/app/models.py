@@ -48,6 +48,19 @@ class Offer(BaseModel):
         return round((self.was - self.price) / self.was * 100)
 
 
+LibraryStatus = Literal["want", "in_progress", "finished"]
+
+
+class LibraryEntry(BaseModel):
+    """One title in one person's library."""
+
+    item: CatalogItem
+    status: LibraryStatus = "want"
+    rating: float | None = None      # 0..10, same scale as catalog ratings
+    note: str = ""
+    updated_at: str | None = None
+
+
 class Availability(BaseModel):
     """Everything we know about getting hold of one title."""
 

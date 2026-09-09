@@ -11,14 +11,15 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import asynccontextmanager
 from threading import Lock
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import subscriptions
+from .auth import User, current_user
 from .availability import availability_for
 from .config import settings
-from .models import CatalogItem, Medium
+from .models import CatalogItem, LibraryEntry, LibraryStatus, Medium
 from .recommend import TasteModel
 from .seed import SEED_ITEMS
 from .sources import igdb, openlibrary, tmdb
@@ -336,6 +337,70 @@ def subscription_table(region: str = Query("US", min_length=2, max_length=2)) ->
             {**r, "usable": r["service_key"] in usable} for r in rows
         ],
     }
+
+
+# --- library (requires a signed-in user) -------------------------------------
+
+
+def _to_entry(row: dict) -> LibraryEntry:
+    """A joined library row -> LibraryEntry, reusing the catalog mapper."""
+    from .store import _row_to_item
+
+    # The library's own columns are aliased lib_* by the query: an item has a
+    # `rating` and a `note` too, and letting them share a name meant the join
+    # returned one of the two at random.
+    updated = row.get("lib_updated_at")
+    return LibraryEntry(
+        item=_row_to_item(row),
+        status=row.get("lib_status") or "want",
+        rating=float(row["lib_rating"]) if row.get("lib_rating") is not None else None,
+        note=row.get("lib_note") or "",
+        updated_at=str(updated) if updated else None,
+    )
+
+
+class LibraryWrite(BaseModel):
+    status: LibraryStatus = "want"
+    rating: float | None = None
+    note: str = ""
+
+
+@app.get("/api/library", response_model=list[LibraryEntry])
+def get_library(user: User = Depends(current_user)) -> list[LibraryEntry]:
+    """Everything this user has marked. Scoped by the verified token's subject -
+    never by anything the caller supplies."""
+    return [_to_entry(r) for r in store.library(user.id)]
+
+
+@app.put("/api/library/{item_id:path}", response_model=LibraryEntry)
+def put_library(
+    item_id: str, body: LibraryWrite, user: User = Depends(current_user)
+) -> LibraryEntry:
+    """Mark a title want / in progress / finished, with an optional rating."""
+    if body.rating is not None and not (0 <= body.rating <= 10):
+        raise HTTPException(status_code=422, detail="Rating must be between 0 and 10.")
+    if _lookup_item(item_id) is None:
+        raise HTTPException(status_code=404, detail="Unknown item id.")
+    store.set_library_entry(user.id, item_id, body.status, body.rating, body.note)
+    row = next((r for r in store.library(user.id) if r["lib_item_id"] == item_id), None)
+    if row is None:
+        raise HTTPException(status_code=500, detail="Entry did not persist.")
+    return _to_entry(row)
+
+
+@app.delete("/api/library/{item_id:path}")
+def delete_library(item_id: str, user: User = Depends(current_user)) -> dict[str, object]:
+    return {"removed": store.remove_library_entry(user.id, item_id)}
+
+
+@app.delete("/api/me/data")
+def delete_my_data(user: User = Depends(current_user)) -> dict[str, object]:
+    """Erase everything we hold for this user.
+
+    Deleting the Supabase account cascades to the same rows, but someone may
+    want to clear their library without closing the account.
+    """
+    return {"deleted_rows": store.delete_user_data(user.id)}
 
 
 @app.get("/api/media")

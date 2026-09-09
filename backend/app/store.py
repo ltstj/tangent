@@ -43,6 +43,13 @@ def _to_array(value) -> np.ndarray:
     return np.asarray(value, dtype=np.float32)
 
 
+def _cols(prefix: str) -> str:
+    """_COLS qualified with a table alias. Needed for the library join: both
+    `items` and `library` have `rating` and `note`, so bare column names are
+    ambiguous even when the output is aliased."""
+    return ", ".join(f"{prefix}.{c.strip()}" for c in _COLS.split(","))
+
+
 def _row_to_item(row: dict) -> CatalogItem:
     """Map a result row to a CatalogItem. Shared by both backends; Postgres hands
     back text[] as a list, SQLite hands back a JSON string."""
@@ -200,6 +207,55 @@ class CatalogStore:
             )
             return cur.rowcount > 0
 
+    # --- per-user library ---------------------------------------------------
+    #
+    # Every one of these filters on user_id explicitly. The API connects as the
+    # table owner and therefore bypasses row-level security, so RLS is defence
+    # in depth here, not the guard - forgetting a user_id predicate would leak
+    # one person's library to another.
+
+    def library(self, user_id: str) -> list[dict]:
+        """One user's entries, most recently touched first."""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT l.item_id AS lib_item_id, l.status AS lib_status, "
+                "l.rating AS lib_rating, l.note AS lib_note, "
+                f"l.updated_at AS lib_updated_at, {_cols('i')} "
+                "FROM library l JOIN items i ON i.id = l.item_id "
+                "WHERE l.user_id = %s ORDER BY l.updated_at DESC",
+                (user_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def set_library_entry(self, user_id: str, item_id: str, status: str,
+                          rating: float | None = None, note: str = "") -> bool:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO library (user_id, item_id, status, rating, note)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, item_id) DO UPDATE SET
+                    status = excluded.status, rating = excluded.rating,
+                    note = excluded.note, updated_at = now()
+                """,
+                (user_id, item_id, status, rating, note),
+            )
+            return cur.rowcount > 0
+
+    def remove_library_entry(self, user_id: str, item_id: str) -> bool:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM library WHERE user_id = %s AND item_id = %s",
+                        (user_id, item_id))
+            return cur.rowcount > 0
+
+    def delete_user_data(self, user_id: str) -> int:
+        """Everything we hold for one person. See auth.users' ON DELETE CASCADE:
+        removing the account removes this too, but this lets someone clear their
+        library without deleting the account."""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM library WHERE user_id = %s", (user_id,))
+            return cur.rowcount
+
     def delete_items(self, ids: list[str]) -> int:
         """Remove rows by id. Used to retire seed rows superseded by real ones."""
         if not ids:
@@ -261,6 +317,16 @@ class SqliteCatalogStore:
                 year INTEGER, rating REAL, popularity REAL, overview TEXT,
                 source TEXT, source_id TEXT, genres TEXT, tags TEXT, image TEXT,
                 embedding TEXT   -- JSON array; pgvector's column, minus pgvector
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library (
+                user_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'want', rating REAL,
+                note TEXT NOT NULL DEFAULT '', updated_at TEXT,
+                PRIMARY KEY (user_id, item_id)
             )
             """
         )
@@ -363,6 +429,40 @@ class SqliteCatalogStore:
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    def library(self, user_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT l.item_id AS lib_item_id, l.status AS lib_status, "
+            "l.rating AS lib_rating, l.note AS lib_note, "
+            f"l.updated_at AS lib_updated_at, {_cols('i')} "
+            "FROM library l JOIN items i ON i.id = l.item_id "
+            "WHERE l.user_id = ? ORDER BY l.updated_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_library_entry(self, user_id: str, item_id: str, status: str,
+                          rating: float | None = None, note: str = "") -> bool:
+        cur = self._conn.execute(
+            "INSERT INTO library (user_id, item_id, status, rating, note, updated_at) "
+            "VALUES (?,?,?,?,?,datetime('now')) "
+            "ON CONFLICT(user_id, item_id) DO UPDATE SET status=excluded.status, "
+            "rating=excluded.rating, note=excluded.note, updated_at=datetime('now')",
+            (user_id, item_id, status, rating, note),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_library_entry(self, user_id: str, item_id: str) -> bool:
+        cur = self._conn.execute("DELETE FROM library WHERE user_id = ? AND item_id = ?",
+                                 (user_id, item_id))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def delete_user_data(self, user_id: str) -> int:
+        cur = self._conn.execute("DELETE FROM library WHERE user_id = ?", (user_id,))
+        self._conn.commit()
+        return cur.rowcount
 
     def delete_items(self, ids: list[str]) -> int:
         if not ids:
