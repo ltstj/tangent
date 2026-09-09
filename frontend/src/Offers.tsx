@@ -56,11 +56,12 @@ export default function Offers({ item }: { item: CatalogItem }) {
             </p>
           )}
 
+          {/* Never collapse "nothing available" into "we couldn't check". */}
           {data.offers.length === 0 ? (
-            <p className="offers-msg">
-              {item.medium === "movie" || item.medium === "tv"
-                ? "Nothing listed for your region."
-                : "No prices available for this one."}
+            <p className={`offers-msg${data.status === "source_unavailable" ? " offers-warn" : ""}`}>
+              {data.status === "source_unavailable"
+                ? `Couldn't reach the price source. ${data.detail}`
+                : data.detail || "Nothing listed."}
             </p>
           ) : (
             <ul className="offer-list">
@@ -85,6 +86,20 @@ export default function Offers({ item }: { item: CatalogItem }) {
                 </li>
               ))}
             </ul>
+          )}
+
+          {data.notes.length > 0 && (
+            <ul className="offer-notes">
+              {data.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
+
+          {/* The requested region and the region the prices apply to can differ
+              (CheapShark is US-only), so say which you are looking at. */}
+          {data.price_region && data.price_region !== data.region && (
+            <p className="offers-attr">Prices shown for {data.price_region}.</p>
           )}
 
           {data.attribution && <p className="offers-attr">{data.attribution}</p>}

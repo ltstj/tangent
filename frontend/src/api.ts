@@ -92,6 +92,17 @@ export interface Offer {
   note: string;
 }
 
+/**
+ * "none_listed" and "source_unavailable" are deliberately distinct: one means
+ * nothing is available, the other means we could not find out. Rendering them
+ * the same way would tell the reader something we do not know.
+ */
+export type AvailabilityStatus =
+  | "ok"
+  | "none_listed"
+  | "source_unavailable"
+  | "not_supported";
+
 export interface OffersResponse {
   item_id: string;
   medium: Medium;
@@ -100,6 +111,13 @@ export interface OffersResponse {
   offers: Offer[];
   /** True when at least one offer carries a real price. */
   priced: boolean;
+  status: AvailabilityStatus;
+  /** Why, when status is not "ok". */
+  detail: string;
+  /** The region these prices actually apply to — not always the one requested. */
+  price_region: string | null;
+  /** Caveats and finds, e.g. a cheaper edition, or that prices are US-only. */
+  notes: string[];
   /** Absent means "we could not price one" — never "it isn't streaming anywhere". */
   cheapest_subscription?: { store: string; price: number; currency: string };
   /** TMDB's terms require showing this whenever streaming data is displayed. */

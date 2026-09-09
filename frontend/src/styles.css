@@ -203,3 +203,9 @@ select:focus { outline: none; border-color: #4f7cff; }
 .owas { margin-left: 0.3rem; color: #7d8da6; font-weight: 400; text-decoration: line-through; }
 .onote { flex: none; font-size: 0.68rem; color: #6b7c96; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .offers-attr { font-size: 0.66rem; color: #5f6f88; margin: 0.5rem 0 0; }
+.offers-warn { color: #e8c07d; }
+.offer-notes { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.offer-notes li {
+  font-size: 0.72rem; color: #c9a3ff; padding-left: 0.7rem; position: relative;
+}
+.offer-notes li::before { content: "→"; position: absolute; left: 0; color: #7a5cff; }
