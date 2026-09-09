@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # share a global quota that is routinely exhausted (HTTP 429), so a key is
     # what makes this dependable rather than optional.
     google_books_api_key: str = ""
+    # IsThereAnyDeal: regional game prices, which CheapShark cannot provide.
+    itad_api_key: str = ""
 
     # Supabase / Postgres (pgvector)
     supabase_url: str = ""

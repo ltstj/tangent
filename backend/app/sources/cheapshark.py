@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 
 from ..models import Offer
+from ..titles import is_edition_of, norm as _norm, pick_exact
 
 BASE = "https://www.cheapshark.com/api/1.0"
 # CheapShark has no regional support: country, region, currency and cc are all
@@ -41,12 +42,6 @@ _STORE_CACHE: dict[str, str] | None = None
 
 def _client() -> httpx.Client:
     return httpx.Client(timeout=20, follow_redirects=True, headers=_HEADERS)
-
-
-def _norm(title: str) -> str:
-    """Comparison key for titles: case, punctuation and spacing all differ
-    between sources, and none of those differences mean anything."""
-    return re.sub(r"[^a-z0-9]+", "", title.lower())
 
 
 def stores(client: httpx.Client | None = None) -> dict[str, str]:
@@ -70,22 +65,8 @@ def stores(client: httpx.Client | None = None) -> dict[str, str]:
 
 
 def pick_game(rows: list[dict[str, Any]], title: str) -> dict[str, Any] | None:
-    """Best match for `title` among CheapShark search rows.
-
-    Exact normalized match wins; otherwise the shortest title that contains ours,
-    which prefers the base game over its editions and bundles. Pure, so it is
-    unit-tested without network.
-    """
-    if not rows:
-        return None
-    want = _norm(title)
-    exact = [r for r in rows if _norm(r.get("external", "")) == want]
-    if exact:
-        return exact[0]
-    contains = [r for r in rows if want and want in _norm(r.get("external", ""))]
-    if contains:
-        return min(contains, key=lambda r: len(r.get("external", "")))
-    return None
+    """Best match for `title` among CheapShark search rows. See titles.pick_exact."""
+    return pick_exact(rows, title, lambda r: r.get("external", ""))
 
 
 def normalize_deals(
@@ -127,18 +108,6 @@ def normalize_deals(
     return offers[:limit]
 
 
-# An edition is a different way to buy the same game. DLC is not: "The Witcher
-# 3 - Hearts of Stone" at $9.99 is an expansion that *requires* the base game, so
-# offering it as a cheaper alternative would be plainly wrong. A title search
-# returns both, so candidates must carry an actual edition marker - a whitelist,
-# because guessing which unmarked subtitles are DLC is the mistake this avoids.
-_EDITION_MARKERS = (
-    "complete edition", "definitive edition", "deluxe edition", "ultimate edition",
-    "gold edition", "enhanced edition", "anniversary edition", "special edition",
-    "game of the year", "goty", "remastered", "collection", "royal edition",
-)
-
-
 def cheaper_edition(rows: list[dict[str, Any]], match: dict[str, Any]) -> dict[str, Any] | None:
     """A cheaper *edition* of the game we matched, or None.
 
@@ -151,21 +120,13 @@ def cheaper_edition(rows: list[dict[str, Any]], match: dict[str, Any]) -> dict[s
         ours = float(match.get("cheapest"))
     except (TypeError, ValueError):
         return None
-    ours_key = _norm(match.get("external", ""))
+    ours_title = match.get("external", "")
     best: dict[str, Any] | None = None
     for row in rows:
         if row.get("gameID") == match.get("gameID"):
             continue
         title = row.get("external", "")
-        low = title.lower()
-        marker = next((m for m in _EDITION_MARKERS if m in low), None)
-        if marker is None:
-            continue
-        # Strict: the candidate must be *our* title plus an edition suffix and
-        # nothing else. Containment is not enough - "ELDEN RING NIGHTREIGN
-        # Deluxe Edition" contains "Elden Ring" but is a different game, and
-        # offering it as a cheaper edition would be wrong.
-        if _norm(low.replace(marker, "")) != ours_key:
+        if not is_edition_of(title, ours_title):
             continue
         try:
             price = float(row.get("cheapest"))

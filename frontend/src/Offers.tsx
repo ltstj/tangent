@@ -9,8 +9,21 @@ const KIND_LABEL: Record<Offer["kind"], string> = {
   link: "Find it",
 };
 
+/**
+ * Prices arrive in the caller's own currency now that IsThereAnyDeal supplies
+ * them per country — GBP, EUR, JPY — so a hardcoded "$" would mislabel them.
+ * Intl also gets the conventions right: JPY has no decimal places.
+ */
+function fmt(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;   // unknown currency code
+  }
+}
+
 function money(o: Offer): string | null {
-  return o.price === null ? null : `$${o.price.toFixed(2)}`;
+  return o.price === null ? null : fmt(o.price, o.currency);
 }
 
 /**
@@ -52,7 +65,7 @@ export default function Offers({ item }: { item: CatalogItem }) {
           {data.cheapest_subscription && (
             <p className="offers-best">
               Cheapest subscription: <strong>{data.cheapest_subscription.store}</strong>{" "}
-              ${data.cheapest_subscription.price.toFixed(2)}/mo
+              {fmt(data.cheapest_subscription.price, data.cheapest_subscription.currency)}/mo
             </p>
           )}
 
@@ -76,7 +89,7 @@ export default function Offers({ item }: { item: CatalogItem }) {
                     <span className="oprice">
                       {money(o)}
                       {o.was !== null && o.was > (o.price ?? 0) && (
-                        <span className="owas">${o.was.toFixed(2)}</span>
+                        <span className="owas">{fmt(o.was, o.currency)}</span>
                       )}
                     </span>
                   ) : (

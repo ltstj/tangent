@@ -3,8 +3,9 @@
 Phase 3. Dispatches per medium, because each one has a genuinely different
 answer available - and, importantly, reports *which* answer it gave:
 
-- **games**: real prices from CheapShark across ~35 storefronts. US only; see
-  PRICE_REGION below.
+- **games**: IsThereAnyDeal when a key is configured - real prices in the
+  caller's own currency, per country - falling back to CheapShark, which is
+  keyless but US/USD only.
 - **movies/tv**: TMDB watch-providers (JustWatch data), genuinely per-region.
   Which services carry it, on subscription, rent or buy - TMDB publishes no
   prices, so these say where and not how much.
@@ -25,7 +26,7 @@ from urllib.parse import quote_plus
 from . import subscriptions
 from .config import settings
 from .models import Availability, CatalogItem, Offer
-from .sources import cheapshark, googlebooks, tmdb
+from .sources import cheapshark, googlebooks, itad, tmdb
 
 # Offers were a live external call on every panel expand - 500-700ms each, and a
 # request to a free service for every click. Cache per medium at roughly the rate
@@ -71,7 +72,9 @@ def _books(item: CatalogItem, region: str) -> Availability:
     return Availability(offers=offers, status="ok", price_region=priced_region, notes=notes)
 
 
-def _games(item: CatalogItem, limit: int, region: str) -> Availability:
+def _cheapshark(item: CatalogItem, limit: int, region: str,
+                extra_notes: list[str] | None = None) -> Availability:
+    """Keyless fallback. US/USD only, and labelled as such."""
     try:
         offers, notes = cheapshark.offers_for_title(item.title, limit=limit)
     except Exception as exc:
@@ -79,6 +82,7 @@ def _games(item: CatalogItem, limit: int, region: str) -> Availability:
             status="source_unavailable",
             detail=f"Could not reach CheapShark ({type(exc).__name__}).",
         )
+    notes = [*(extra_notes or []), *notes]
     # CheapShark ignores every region parameter it is given, so saying "here are
     # prices for GB" would be a lie. Label them instead.
     if region.upper() != cheapshark.PRICE_REGION:
@@ -88,6 +92,33 @@ def _games(item: CatalogItem, limit: int, region: str) -> Availability:
         status="ok" if offers else "none_listed",
         detail="" if offers else "No current deals listed.",
         price_region=cheapshark.PRICE_REGION,
+        notes=notes,
+    )
+
+
+def _games(item: CatalogItem, limit: int, region: str) -> Availability:
+    """IsThereAnyDeal first when we have a key: it prices in the caller's own
+    currency and reports the historical low, so it supersedes CheapShark."""
+    if not settings.itad_api_key:
+        return _cheapshark(item, limit, region)
+    try:
+        offers, notes = itad.offers_for_title(item.title, country=region, limit=limit)
+    except Exception as exc:
+        # Degrade to US prices rather than showing nothing, but say so - a
+        # silent currency switch would be worse than an explicit downgrade.
+        return _cheapshark(
+            item, limit, region,
+            extra_notes=[f"Regional pricing unavailable ({type(exc).__name__})."],
+        )
+    if not offers:
+        # ITAD knows the game but has no deals in this country; CheapShark may
+        # still have a US price, which beats an empty panel.
+        return _cheapshark(item, limit, region,
+                           extra_notes=[f"No {region.upper()} deals listed."])
+    return Availability(
+        offers=offers,
+        status="ok",
+        price_region=region.upper(),
         notes=notes,
     )
 

@@ -21,7 +21,7 @@ def _no_external_keys(monkeypatch):
     """
     from app.config import settings
 
-    for field in ("google_books_api_key", "tmdb_api_key",
+    for field in ("google_books_api_key", "itad_api_key", "tmdb_api_key",
                   "igdb_client_id", "igdb_client_secret"):
         monkeypatch.setattr(settings, field, "")
     yield
