@@ -79,3 +79,20 @@ def test_cheapest_is_none_when_nothing_can_be_priced():
     """None must read as "we don't know", never as "it isn't streaming"."""
     assert cheapest([Offer(kind="subscription", store="A", url="u")]) is None
     assert cheapest([]) is None
+
+
+def test_a_priced_offer_is_named_after_the_service_not_the_reseller():
+    """store_key strips reseller suffixes, so "Paramount+ Amazon Channel" matches
+    the Paramount Plus row. Quoting that price under the reseller's name is less
+    true than naming the service we actually priced."""
+    offers = [Offer(kind="subscription", store="Paramount+ Amazon Channel", url="u")]
+    annotate(offers, [_row("paramount plus", 8.99, days_ago=1, name="Paramount Plus")], TODAY)
+    assert offers[0].price == 8.99
+    assert offers[0].store == "Paramount Plus"
+
+
+def test_an_unpriced_offer_keeps_its_own_name():
+    offers = [Offer(kind="subscription", store="Paramount Plus Premium", url="u")]
+    annotate(offers, [_row("paramount plus", 8.99, days_ago=1, name="Paramount Plus")], TODAY)
+    assert offers[0].store == "Paramount Plus Premium"   # not silently rebranded
+    assert offers[0].price is None

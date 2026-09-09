@@ -59,6 +59,13 @@ def annotate(offers: list[Offer], rows: list[dict], today: _dt.date | None = Non
             offer.currency = row.get("currency") or "USD"
             checked = row.get("checked_on")
             offer.note = f"per {row.get('period') or 'month'}, checked {checked}"
+            # Name the service we actually priced. store_key strips reseller
+            # suffixes, so "Paramount+ Amazon Channel" matches the Paramount
+            # Plus row - and quoting that price under the reseller's name is
+            # both uglier and less true than naming the service itself.
+            display = row.get("display_name")
+            if display:
+                offer.store = display
         elif key in by_key:
             offer.note = "subscription price not verified"
         else:
