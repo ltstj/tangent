@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Auth from "./Auth";
 import Library from "./Library";
+import MatchFeedback from "./MatchFeedback";
 import LibraryControls from "./LibraryControls";
 import Offers from "./Offers";
 import PosterWall from "./PosterWall";
 import { supabase } from "./supabase";
 import {
+  getFeedback,
   getGenres,
   getLibrary,
   recommend,
@@ -14,6 +16,7 @@ import {
   type CatalogItem,
   type GenreCount,
   type LibraryEntry,
+  type MatchFeedback as MatchFeedbackRow,
   type Medium,
   type Recommendation,
 } from "./api";
@@ -43,6 +46,10 @@ export default function App() {
   const [view, setView] = useState<"discover" | "library">("discover");
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [personalized, setPersonalized] = useState(false);
+  const [feedback, setFeedback] = useState<Record<string, boolean>>({});
+  // The favorites/genres a result set came from, captured at request time so a
+  // verdict records what it was actually a suggestion *for*.
+  const [resultSources, setResultSources] = useState<string[]>([]);
 
   const [active, setActive] = useState(-1); // keyboard cursor in the suggestion list
   const debounce = useRef<number | undefined>(undefined);
@@ -69,10 +76,16 @@ export default function App() {
   useEffect(() => {
     if (!session) {
       setLibrary([]);
+      setFeedback({});
       setView("discover");
       return;
     }
     getLibrary().then(setLibrary).catch(() => setLibrary([]));
+    getFeedback()
+      .then((rows: MatchFeedbackRow[]) =>
+        setFeedback(Object.fromEntries(rows.map((r) => [r.item_id, r.helpful]))),
+      )
+      .catch(() => setFeedback({}));
   }, [session]);
 
   // Search-as-you-type (debounced). Live source lookups make this a real request,
@@ -158,6 +171,10 @@ export default function App() {
       });
       setResults(res.results);
       setPersonalized(res.personalized);
+      setResultSources([
+        ...favorites.map((f) => f.id),
+        ...(genresAreSeed ? picked.map((g) => `g:${g}`) : []),
+      ]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setResults([]);
@@ -391,6 +408,21 @@ export default function App() {
                 {r.item.genres.length > 0 && <p className="genres">{r.item.genres.join(", ")}</p>}
                 {r.reasons.length > 0 && <p className="why">{r.reasons.join(" · ")}</p>}
                 {r.item.overview && <p className="overview">{r.item.overview}</p>}
+                {session && (
+                  <MatchFeedback
+                    itemId={r.item.id}
+                    sourceIds={resultSources}
+                    current={feedback[r.item.id]}
+                    onChange={(helpful) =>
+                      setFeedback((prev) => {
+                        const next = { ...prev };
+                        if (helpful === undefined) delete next[r.item.id];
+                        else next[r.item.id] = helpful;
+                        return next;
+                      })
+                    }
+                  />
+                )}
                 {session && (
                   <LibraryControls
                     item={r.item}

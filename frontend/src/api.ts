@@ -40,6 +40,8 @@ export interface RecommendResult {
   /** True when the caller's library shaped these. */
   personalized: boolean;
   library_signals: number;
+  /** How many suggestions were hidden because the user rejected them before. */
+  suppressed: number;
 }
 
 export async function searchTitles(q: string, medium?: Medium): Promise<CatalogItem[]> {
@@ -104,6 +106,7 @@ export async function recommend(
     results: (data.results ?? []) as Recommendation[],
     personalized: Boolean(data.personalized),
     library_signals: Number(data.library_signals ?? 0),
+    suppressed: Number(data.suppressed ?? 0),
   };
 }
 
@@ -209,4 +212,39 @@ export async function deleteMyData(): Promise<number> {
   });
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
   return (await res.json()).deleted_rows ?? 0;
+}
+
+export interface MatchFeedback {
+  item_id: string;
+  source_ids: string[];
+  helpful: boolean;
+}
+
+export async function getFeedback(): Promise<MatchFeedback[]> {
+  const res = await fetch(`${BASE}/api/feedback`, { headers: await authHeaders() });
+  if (res.status === 401) return [];
+  if (!res.ok) throw new Error(`feedback failed: ${res.status}`);
+  return res.json();
+}
+
+/** Mark a recommendation as a good or bad *match* — not as a good or bad title. */
+export async function setFeedback(
+  itemId: string,
+  helpful: boolean,
+  sourceIds: string[],
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/feedback/${encodeURI(itemId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ helpful, source_ids: sourceIds }),
+  });
+  if (!res.ok) throw new Error(`feedback failed: ${res.status}`);
+}
+
+export async function clearFeedback(itemId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/feedback/${encodeURI(itemId)}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`feedback failed: ${res.status}`);
 }

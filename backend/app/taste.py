@@ -40,3 +40,29 @@ def weights_from_library(rows: list[dict]) -> dict[str, float]:
         if abs(w) > 1e-9:
             out[item_id] = w
     return out
+
+
+# A rejected *match* is not a disliked *title*: "that was a bad answer to my
+# question" says nothing about whether the thing is good. So a thumbs-down
+# suppresses that suggestion for that person rather than pushing their taste
+# vector away from it - pushing would mislearn from a verdict about a pairing.
+#
+# A thumbs-up is weighted well below a real rating for the mirror-image reason:
+# "good suggestion" is weaker evidence about taste than "I finished this and
+# rated it 9".
+MATCH_UP_WEIGHT = 0.35
+
+
+def from_match_feedback(rows: list[dict]) -> tuple[dict[str, float], set[str]]:
+    """Feedback rows -> (weights to add, ids to suppress)."""
+    weights: dict[str, float] = {}
+    suppress: set[str] = set()
+    for row in rows:
+        item_id = row.get("item_id")
+        if not item_id:
+            continue
+        if row.get("helpful"):
+            weights[item_id] = MATCH_UP_WEIGHT
+        else:
+            suppress.add(item_id)
+    return weights, suppress

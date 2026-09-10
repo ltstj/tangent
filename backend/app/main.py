@@ -415,6 +415,36 @@ def _to_entry(row: dict) -> LibraryEntry:
     )
 
 
+class FeedbackWrite(BaseModel):
+    """A verdict on a recommendation, not on a title."""
+
+    helpful: bool
+    # What the recommendation came from. Without it a row records that someone
+    # rejected a suggestion but not what it was a suggestion for.
+    source_ids: list[str] = []
+
+
+@app.put("/api/feedback/{item_id:path}")
+def put_feedback(
+    item_id: str, body: FeedbackWrite, user: User = Depends(current_user)
+) -> dict[str, object]:
+    """Mark a recommendation as a good or bad match."""
+    if _lookup_item(item_id) is None:
+        raise HTTPException(status_code=404, detail="Unknown item id.")
+    store.set_match_feedback(user.id, item_id, body.helpful, body.source_ids)
+    return {"item_id": item_id, "helpful": body.helpful}
+
+
+@app.delete("/api/feedback/{item_id:path}")
+def delete_feedback(item_id: str, user: User = Depends(current_user)) -> dict[str, object]:
+    return {"cleared": store.clear_match_feedback(user.id, item_id)}
+
+
+@app.get("/api/feedback")
+def get_feedback(user: User = Depends(current_user)) -> list[dict]:
+    return store.match_feedback(user.id)
+
+
 class LibraryWrite(BaseModel):
     status: LibraryStatus = "want"
     rating: float | None = None
@@ -513,8 +543,14 @@ def recommend(
     # even with no favorites typed in - and its titles are never recommended
     # back to them.
     weights: dict[str, float] = {}
+    suppress: set[str] = set()
     if user is not None and req.use_library:
         weights = taste.weights_from_library(store.library(user.id))
+        # Match verdicts: an up-vote adds a little pull, a down-vote hides that
+        # suggestion for this person without claiming they dislike the title.
+        fb_weights, suppress = taste.from_match_feedback(store.match_feedback(user.id))
+        for item_id, w in fb_weights.items():
+            weights.setdefault(item_id, w)
 
     if not known and not req.seed_genres and not weights:
         raise HTTPException(
@@ -533,6 +569,7 @@ def recommend(
         filter_genres=req.filter_genres,
         genre_weight=req.genre_weight,
         weights=weights,
+        exclude_ids=suppress,
     )
     return {
         "count": len(results),
@@ -540,4 +577,5 @@ def recommend(
         # Say whether the library shaped this, so the UI need not guess.
         "personalized": bool(weights),
         "library_signals": len(weights),
+        "suppressed": len(suppress),
     }

@@ -273,3 +273,17 @@ select:focus { outline: none; border-color: #4f7cff; }
 .lib-empty { text-align: center; }
 .lib-empty p { margin: 0.2rem 0; }
 .lib-empty .hint { color: #6b7c96; font-size: 0.82rem; max-width: 34rem; margin: 0.5rem auto 0; line-height: 1.5; }
+
+/* --- "Was this a good match?" --- */
+.mfb { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.6rem; }
+.mfb-q { font-size: 0.72rem; color: #6b7c96; margin-right: 0.1rem; }
+.mfb-btn {
+  width: 22px; height: 22px; line-height: 1; cursor: pointer;
+  border-radius: 6px; border: 1px solid #2a3650; background: #131b2e; color: #aebbcf;
+  font-size: 0.8rem; transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.mfb-btn:hover:not(:disabled) { border-color: #4f7cff; color: #e8edf4; }
+.mfb-btn.on-up { background: rgba(63,143,99,0.22); border-color: #3f8f63; color: #a6e0bd; }
+.mfb-btn.on-down { background: rgba(176,90,90,0.22); border-color: #b05a5a; color: #e8b3b3; }
+.mfb-btn:disabled { opacity: 0.6; cursor: default; }
+.mfb-note { font-size: 0.68rem; color: #6b7c96; }

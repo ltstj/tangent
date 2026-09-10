@@ -248,13 +248,50 @@ class CatalogStore:
                         (user_id, item_id))
             return cur.rowcount > 0
 
-    def delete_user_data(self, user_id: str) -> int:
-        """Everything we hold for one person. See auth.users' ON DELETE CASCADE:
-        removing the account removes this too, but this lets someone clear their
-        library without deleting the account."""
+    def match_feedback(self, user_id: str) -> list[dict]:
+        """This user's verdicts on recommendations they were given."""
         with self._connection() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM library WHERE user_id = %s", (user_id,))
-            return cur.rowcount
+            cur.execute(
+                "SELECT item_id, source_ids, helpful FROM match_feedback "
+                "WHERE user_id = %s", (user_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def set_match_feedback(self, user_id: str, item_id: str, helpful: bool,
+                           source_ids: list[str] | None = None) -> bool:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO match_feedback (user_id, item_id, source_ids, helpful)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, item_id) DO UPDATE SET
+                    helpful = excluded.helpful, source_ids = excluded.source_ids,
+                    created_at = now()
+                """,
+                (user_id, item_id, list(source_ids or []), helpful),
+            )
+            return cur.rowcount > 0
+
+    def clear_match_feedback(self, user_id: str, item_id: str) -> bool:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM match_feedback WHERE user_id = %s AND item_id = %s",
+                        (user_id, item_id))
+            return cur.rowcount > 0
+
+    def delete_user_data(self, user_id: str) -> int:
+        """Everything we hold for one person, across every table that holds any.
+
+        See auth.users' ON DELETE CASCADE: removing the account removes all of
+        this too, but this lets someone clear their data without closing the
+        account. Any new personal table must be added here as well, or "delete
+        my data" quietly stops being true.
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            total = 0
+            for table in ("library", "match_feedback"):
+                cur.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
+                total += cur.rowcount
+            return total
 
     def delete_items(self, ids: list[str]) -> int:
         """Remove rows by id. Used to retire seed rows superseded by real ones."""
@@ -326,6 +363,15 @@ class SqliteCatalogStore:
                 user_id TEXT NOT NULL, item_id TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'want', rating REAL,
                 note TEXT NOT NULL DEFAULT '', updated_at TEXT,
+                PRIMARY KEY (user_id, item_id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS match_feedback (
+                user_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                source_ids TEXT NOT NULL DEFAULT '[]', helpful INTEGER NOT NULL,
                 PRIMARY KEY (user_id, item_id)
             )
             """
@@ -459,10 +505,43 @@ class SqliteCatalogStore:
         self._conn.commit()
         return cur.rowcount > 0
 
-    def delete_user_data(self, user_id: str) -> int:
-        cur = self._conn.execute("DELETE FROM library WHERE user_id = ?", (user_id,))
+    def match_feedback(self, user_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT item_id, source_ids, helpful FROM match_feedback WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["source_ids"] = json.loads(d["source_ids"] or "[]")
+            d["helpful"] = bool(d["helpful"])
+            out.append(d)
+        return out
+
+    def set_match_feedback(self, user_id: str, item_id: str, helpful: bool,
+                           source_ids: list[str] | None = None) -> bool:
+        cur = self._conn.execute(
+            "INSERT INTO match_feedback (user_id, item_id, source_ids, helpful) "
+            "VALUES (?,?,?,?) ON CONFLICT(user_id, item_id) DO UPDATE SET "
+            "helpful=excluded.helpful, source_ids=excluded.source_ids",
+            (user_id, item_id, json.dumps(list(source_ids or [])), 1 if helpful else 0),
+        )
         self._conn.commit()
-        return cur.rowcount
+        return cur.rowcount > 0
+
+    def clear_match_feedback(self, user_id: str, item_id: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM match_feedback WHERE user_id = ? AND item_id = ?", (user_id, item_id))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def delete_user_data(self, user_id: str) -> int:
+        total = 0
+        for table in ("library", "match_feedback"):
+            cur = self._conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+            total += cur.rowcount
+        self._conn.commit()
+        return total
 
     def delete_items(self, ids: list[str]) -> int:
         if not ids:
