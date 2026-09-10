@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Auth from "./Auth";
+import Library from "./Library";
 import LibraryControls from "./LibraryControls";
 import Offers from "./Offers";
 import PosterWall from "./PosterWall";
@@ -39,6 +40,7 @@ export default function App() {
   const [genreWeight, setGenreWeight] = useState(0.5);
 
   const [session, setSession] = useState<Session | null>(null);
+  const [view, setView] = useState<"discover" | "library">("discover");
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [personalized, setPersonalized] = useState(false);
 
@@ -67,6 +69,7 @@ export default function App() {
   useEffect(() => {
     if (!session) {
       setLibrary([]);
+      setView("discover");
       return;
     }
     getLibrary().then(setLibrary).catch(() => setLibrary([]));
@@ -111,6 +114,14 @@ export default function App() {
   function removeFavorite(id: string) {
     setFavorites((f) => f.filter((x) => x.id !== id));
   }
+  /** Apply one entry change everywhere the library is shown. */
+  function applyEntry(itemId: string, entry: LibraryEntry | null) {
+    setLibrary((prev) => {
+      const rest = prev.filter((e) => e.item.id !== itemId);
+      return entry ? [entry, ...rest] : rest;
+    });
+  }
+
   function toggleGenre(g: string) {
     setPicked((p) => (p.includes(g) ? p.filter((x) => x !== g) : [...p, g]));
   }
@@ -167,11 +178,31 @@ export default function App() {
         <header>
           <h1>Tangent</h1>
           <p className="tag">Find your next favorite across movies, TV, games, and books.</p>
+          {session && (
+            <nav className="views">
+              <button
+                className={`view-tab${view === "discover" ? " on" : ""}`}
+                onClick={() => setView("discover")}
+              >
+                Discover
+              </button>
+              <button
+                className={`view-tab${view === "library" ? " on" : ""}`}
+                onClick={() => setView("library")}
+              >
+                My library<span className="gcount">{library.length}</span>
+              </button>
+            </nav>
+          )}
           <Auth session={session} onChange={() => {
             if (supabase) supabase.auth.getSession().then(({ data }) => setSession(data.session));
           }} />
         </header>
 
+        {view === "library" ? (
+          <Library entries={library} onChange={applyEntry} />
+        ) : (
+        <>
         <section className="panel">
           <div className={`search${suggestions.length ? " open" : ""}`}>
             <svg className="search-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -364,12 +395,7 @@ export default function App() {
                   <LibraryControls
                     item={r.item}
                     entry={library.find((e) => e.item.id === r.item.id)}
-                    onChange={(entry) =>
-                      setLibrary((prev) => {
-                        const rest = prev.filter((e) => e.item.id !== r.item.id);
-                        return entry ? [entry, ...rest] : rest;
-                      })
-                    }
+                    onChange={(entry) => applyEntry(r.item.id, entry)}
                   />
                 )}
                 <Offers item={r.item} />
@@ -377,6 +403,8 @@ export default function App() {
             </article>
           ))}
         </section>
+        </>
+        )}
       </div>
     </>
   );

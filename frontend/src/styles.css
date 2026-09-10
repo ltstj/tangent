@@ -254,3 +254,22 @@ select:focus { outline: none; border-color: #4f7cff; }
 }
 .lib-score { font-variant-numeric: tabular-nums; font-size: 0.76rem; color: #e8edf4; font-weight: 650; min-width: 1.9rem; text-align: right; }
 .lib-hint { font-size: 0.68rem; color: #6b7c96; min-width: 6.2rem; }
+
+/* --- View switcher --- */
+.views { display: flex; justify-content: center; gap: 0.4rem; margin-top: 0.9rem; }
+.view-tab {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.35rem 0.85rem; font-size: 0.83rem; cursor: pointer;
+  border-radius: 999px; border: 1px solid #2a3650; background: #131b2e; color: #c3cee0;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.view-tab:hover { border-color: #4f7cff; color: #e8edf4; }
+.view-tab.on { background: linear-gradient(90deg, rgba(79,124,255,0.24), rgba(122,92,255,0.24)); border-color: #4f7cff; color: #fff; }
+
+.lib-filters { display: flex; justify-content: center; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 1rem; }
+.lib-filters .gchip:disabled { opacity: 0.4; cursor: default; }
+.lib-filters .gchip:disabled:hover { border-color: #2a3650; color: #c3cee0; }
+
+.lib-empty { text-align: center; }
+.lib-empty p { margin: 0.2rem 0; }
+.lib-empty .hint { color: #6b7c96; font-size: 0.82rem; max-width: 34rem; margin: 0.5rem auto 0; line-height: 1.5; }
