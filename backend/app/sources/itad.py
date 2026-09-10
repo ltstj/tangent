@@ -28,6 +28,12 @@ from ..models import Offer
 from ..titles import is_edition_of, pick_exact
 
 BASE = "https://api.isthereanydeal.com"
+# Both game price sources cover PC storefronts only. ITAD's US shop list is 34
+# entries of Steam, GOG, Epic, Humble and friends - no PSN, Xbox Store or
+# Nintendo eShop - and CheapShark is the same. Console prices are simply not
+# available from any free source, so the panel says which platform these are
+# for rather than letting a console player assume they apply.
+PLATFORM_NOTE = "PC storefront prices; consoles not covered."
 
 
 def _search(client: httpx.Client, title: str, results: int = 12) -> list[dict[str, Any]]:

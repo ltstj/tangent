@@ -50,8 +50,18 @@ def test_search_augments_from_live_sources(client, monkeypatch):
     r = client.get("/api/search", params={"q": "severance"})
     assert r.status_code == 200
     assert any(i["id"] == "tv:tmdb:99999" for i in r.json())
-    # the live hit was added to the catalog, so it's now recommendable
+
+    # Offered, not stored. A search must not grow the catalog with whatever it
+    # happened to return - that is how seven unrelated films called "Arrival"
+    # got in - and it keeps the write off the response path.
     assert client.get("/api/item/tv:tmdb:99999").json()["title"] == "Severance"
+    assert main.store.get("tv:tmdb:99999") is None
+
+    # Using it is what commits it. Recommending from it needs it scoreable, so
+    # that is the moment it earns a place in the catalog.
+    rec = client.post("/api/recommend", json={"favorite_ids": ["tv:tmdb:99999"], "limit": 3})
+    assert rec.status_code == 200
+    assert main.store.get("tv:tmdb:99999") is not None
 
 
 def test_recommend_rejects_unknown_ids(client):

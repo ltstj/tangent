@@ -5,7 +5,8 @@ answer available - and, importantly, reports *which* answer it gave:
 
 - **games**: IsThereAnyDeal when a key is configured - real prices in the
   caller's own currency, per country - falling back to CheapShark, which is
-  keyless but US/USD only.
+  keyless but US/USD only. Both are **PC storefronts only**; no free source
+  covers PSN, Xbox or eShop pricing, so the offers say so.
 - **movies/tv**: TMDB watch-providers (JustWatch data), genuinely per-region.
   Which services carry it, on subscription, rent or buy - TMDB publishes no
   prices, so these say where and not how much.
@@ -87,6 +88,8 @@ def _cheapshark(item: CatalogItem, limit: int, region: str,
     # prices for GB" would be a lie. Label them instead.
     if region.upper() != cheapshark.PRICE_REGION:
         notes.append(f"Prices are {cheapshark.PRICE_REGION} storefronts in USD.")
+    if offers:
+        notes.append(itad.PLATFORM_NOTE)
     return Availability(
         offers=offers,
         status="ok" if offers else "none_listed",
@@ -119,7 +122,7 @@ def _games(item: CatalogItem, limit: int, region: str) -> Availability:
         offers=offers,
         status="ok",
         price_region=region.upper(),
-        notes=notes,
+        notes=[*notes, itad.PLATFORM_NOTE],
     )
 
 

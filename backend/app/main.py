@@ -78,6 +78,10 @@ def _lookup_item(item_id: str) -> CatalogItem | None:
     if hit is not None:
         return hit
     found = store.get(item_id)
+    if found is None:
+        # Offered by a recent search but never used until now: this is the
+        # moment it earns a place in the catalog.
+        found = _promote(item_id)
     if found is not None:
         with _model_lock:
             if _item_index is not None:
@@ -170,21 +174,70 @@ _live_cache: dict[tuple[str, str | None], tuple[float, list[CatalogItem]]] = {}
 _live_cache_lock = Lock()
 
 
-def _absorb(items: list[CatalogItem]) -> list[CatalogItem]:
-    """Add newly seen titles to the catalog so they become recommendable.
+# Titles seen in a live search but not yet in the catalog. Search used to write
+# every result straight to Postgres, which had two costs: the catalog grew with
+# whatever a search happened to return (seven unrelated films called "Arrival"
+# arrived this way, purely from testing), and the writes sat on the response
+# path, so an uncached keystroke paid 1.9-2.6s despite the source lookups being
+# capped at 0.9s.
+#
+# Now a search result is only *offered*. It is written to the catalog when
+# someone actually uses it - adds it as a favorite, or marks it in their library
+# - which is the point at which it needs to be scoreable and worth keeping.
+# Holding the objects server-side also means we never have to trust an item
+# posted back to us by a browser.
+_SEEN_TTL_S = 1800.0
+_seen: dict[str, tuple[float, CatalogItem]] = {}
+_seen_lock = Lock()
 
-    TMDB search results carry no keywords, so a title added this way would sit in
-    the catalog matchable on broad genres alone. Enrich it off the request path
-    and re-save, so it is fully comparable by the time anyone recommends from it.
-    """
-    new = [i for i in items if store.get(i.id) is None]
-    if new:
-        store.upsert_items(new)
-        refresh_model(new)
-        needs_keywords = [i for i in new if i.source == "tmdb" and not i.tags]
-        if needs_keywords:
-            _live_pool.submit(_enrich_later, needs_keywords)
+
+def _offer(items: list[CatalogItem]) -> list[CatalogItem]:
+    """Remember these so they can be promoted on demand. No database writes."""
+    expiry = time.monotonic() + _SEEN_TTL_S
+    with _seen_lock:
+        for item in items:
+            _seen[item.id] = (expiry, item)
+        # Bound the dict: drop whatever has aged out.
+        if len(_seen) > 2000:
+            now = time.monotonic()
+            for key in [k for k, (exp, _) in _seen.items() if exp < now]:
+                _seen.pop(key, None)
     return items
+
+
+def _resolve_item(item_id: str) -> CatalogItem | None:
+    """Read an item without committing it to the catalog.
+
+    For GET endpoints: something a search just offered should be viewable, but
+    merely looking at it is not a reason to keep it forever. Writes and scoring
+    go through _lookup_item, which promotes.
+    """
+    with _model_lock:
+        cached = _item_index.get(item_id) if _item_index else None
+    if cached is not None:
+        return cached
+    found = store.get(item_id)
+    if found is not None:
+        return found
+    with _seen_lock:
+        hit = _seen.get(item_id)
+    return hit[1] if hit is not None and hit[0] >= time.monotonic() else None
+
+
+def _promote(item_id: str) -> CatalogItem | None:
+    """Write a previously-offered title into the catalog, on first real use."""
+    with _seen_lock:
+        hit = _seen.get(item_id)
+    if hit is None or hit[0] < time.monotonic():
+        return None
+    item = hit[1]
+    store.upsert_items([item])
+    refresh_model([item])
+    # TMDB search results carry no keywords, so a title promoted this way would
+    # be matchable on broad genres alone. Enrich it off the request path.
+    if item.source == "tmdb" and not item.tags:
+        _live_pool.submit(_enrich_later, [item])
+    return item
 
 
 def _enrich_later(items: list[CatalogItem]) -> None:
@@ -197,9 +250,11 @@ def _enrich_later(items: list[CatalogItem]) -> None:
 
 
 def _drain_later(fut: Future) -> None:
-    """A source that missed the deadline still gets its results into the catalog."""
+    """A source that missed the deadline still gets its results remembered, so a
+    title the user is about to pick is promotable even though the response has
+    already gone out."""
     try:
-        _absorb(fut.result())
+        _offer(fut.result())
     except Exception:
         pass
 
@@ -257,7 +312,7 @@ def search(
     if len(local) >= limit:
         return local
 
-    live = _absorb(_live_search(q, medium, limit))
+    live = _offer(_live_search(q, medium, limit))
 
     seen = {i.id for i in local}
     merged = list(local)
@@ -270,7 +325,7 @@ def search(
 
 @app.get("/api/item/{item_id:path}", response_model=CatalogItem)
 def get_item(item_id: str) -> CatalogItem:
-    item = store.get(item_id)
+    item = _resolve_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Item '{item_id}' not found.")
     return item
