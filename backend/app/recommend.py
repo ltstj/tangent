@@ -46,6 +46,11 @@ W_TAG = 0.6
 W_EMBED = 0.9
 W_RATING = 0.25
 W_ERA = 0.15
+# Collaborative filtering, scaled by how much interaction data exists (see
+# collab.confidence). Deliberately capable of outweighing a tag match but not a
+# genre one: "other people liked both" is a strong hint and a poor veto - it
+# knows nothing about what either title actually is.
+W_COLLAB = 0.7
 # The era scale is fixed (not Date.now-derived) so results are deterministic.
 _ERA_MIN, _ERA_MAX = 1950, 2030
 
@@ -150,6 +155,7 @@ class TasteModel:
         genre_weight: float | None = None,
         weights: dict[str, float] | None = None,
         exclude_ids: set[str] | None = None,
+        collab_scores: dict[str, float] | None = None,
     ) -> list[dict]:
         """Rank the catalog against a taste.
 
@@ -167,6 +173,8 @@ class TasteModel:
                          See taste.weights_from_library.
         exclude_ids    - never recommend these. Anything already in the library
                          is a poor recommendation however well it scores.
+        collab_scores  - item -> collaborative score from collab.scores_for.
+                         Blended on top, weighted by W_COLLAB.
         """
         known = [fid for fid in favorite_ids if fid in self.index]
         seeds = [g for g in (seed_genres or []) if f"g:{g.strip().lower()}" in self.genre_vocab]
@@ -224,6 +232,14 @@ class TasteModel:
         if self.embed.shape[1] and rows and liked:
             w_e = np.array([signed.get(r, 1.0) for r in rows], dtype=np.float32)
             scores = scores + W_EMBED * tone_mult * (self.embed @ _unit(w_e @ self.embed[rows]))
+
+        if collab_scores:
+            collab = np.zeros(len(self.items), dtype=np.float32)
+            for item_id, value in collab_scores.items():
+                row = self.index.get(item_id)
+                if row is not None:
+                    collab[row] = value
+            scores = scores + W_COLLAB * collab
 
         fav_items = [self.items[r] for r in rows]
         fav_genres = {g for it in fav_items for g in it.genres} | {

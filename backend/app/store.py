@@ -248,6 +248,31 @@ class CatalogStore:
                         (user_id, item_id))
             return cur.rowcount > 0
 
+    def interactions(self) -> list[tuple[str, str, float]]:
+        """(user_id, item_id, weight) across everyone, for collaborative filtering.
+
+        Cross-user by necessity - that is what collaborative filtering is - so it
+        returns only what the model needs and never leaves the server. Nothing
+        here reaches an API response; see collab.py for the thresholds that stop
+        a small instance from exposing an individual through aggregates.
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id::text AS user_id, item_id,
+                       CASE WHEN rating IS NOT NULL THEN (rating - 5.0) / 5.0
+                            WHEN status = 'finished' THEN 0.5
+                            WHEN status = 'in_progress' THEN 0.4
+                            ELSE 0.3 END AS weight
+                FROM library
+                UNION ALL
+                SELECT user_id::text AS user_id, item_id,
+                       CASE WHEN helpful THEN 0.35 ELSE -1.0 END AS weight
+                FROM match_feedback
+                """
+            )
+            return [(r["user_id"], r["item_id"], float(r["weight"])) for r in cur.fetchall()]
+
     def match_feedback(self, user_id: str) -> list[dict]:
         """This user's verdicts on recommendations they were given."""
         with self._connection() as conn, conn.cursor() as cur:
@@ -504,6 +529,23 @@ class SqliteCatalogStore:
                                  (user_id, item_id))
         self._conn.commit()
         return cur.rowcount > 0
+
+    def interactions(self) -> list[tuple[str, str, float]]:
+        rows = self._conn.execute(
+            """
+            SELECT user_id, item_id,
+                   CASE WHEN rating IS NOT NULL THEN (rating - 5.0) / 5.0
+                        WHEN status = 'finished' THEN 0.5
+                        WHEN status = 'in_progress' THEN 0.4
+                        ELSE 0.3 END AS weight
+            FROM library
+            UNION ALL
+            SELECT user_id, item_id,
+                   CASE WHEN helpful THEN 0.35 ELSE -1.0 END AS weight
+            FROM match_feedback
+            """
+        ).fetchall()
+        return [(r["user_id"], r["item_id"], float(r["weight"])) for r in rows]
 
     def match_feedback(self, user_id: str) -> list[dict]:
         rows = self._conn.execute(

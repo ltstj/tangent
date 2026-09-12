@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import subscriptions
-from . import taste
+from . import collab, taste
 from .auth import User, current_user, optional_user
 from .availability import availability_for
 from .config import settings
@@ -56,6 +56,31 @@ _model_lock = Lock()
 _PRICE_TTL_S = 60.0
 _price_cache: dict[str, tuple[float, list[dict]]] = {}
 _price_lock = Lock()
+
+# The collaborative model is rebuilt from every user's interactions, which is a
+# whole-table read, so it is cached and refreshed on a timer rather than per
+# request. Interaction data changes slowly and a few minutes of staleness costs
+# nothing.
+_COLLAB_TTL_S = 300.0
+_collab_model: collab.CollabModel | None = None
+_collab_built_at = 0.0
+_collab_lock = Lock()
+
+
+def _collab() -> collab.CollabModel:
+    global _collab_model, _collab_built_at
+    now = time.monotonic()
+    with _collab_lock:
+        fresh = _collab_model is not None and now - _collab_built_at < _COLLAB_TTL_S
+        if fresh:
+            return _collab_model  # type: ignore[return-value]
+    try:
+        model = collab.build(store.interactions())
+    except Exception:
+        model = collab.CollabModel()
+    with _collab_lock:
+        _collab_model, _collab_built_at = model, now
+    return model
 
 
 def _lookup_item(item_id: str) -> CatalogItem | None:
@@ -524,6 +549,7 @@ class RecommendRequest(BaseModel):
     filter_genres: list[str] | None = None    # restrict results, never scores them
     genre_weight: float | None = None         # 0 = all tone, 1 = all genre, 0.5 default
     use_library: bool = True                  # ignored when signed out
+    use_collab: bool = True                   # ignored when signed out
     limit: int = 12
 
 
@@ -552,6 +578,15 @@ def recommend(
         for item_id, w in fb_weights.items():
             weights.setdefault(item_id, w)
 
+    # "People whose favorites overlap with yours also loved X." Contributes
+    # nothing until enough people have contributed data - see collab.MIN_USERS.
+    collab_scores: dict[str, float] = {}
+    collab_model = _collab()
+    if user is not None and req.use_collab:
+        liked = [i for i, w in weights.items() if w > 0] + known
+        raw = collab_model.scores_for(liked)
+        collab_scores = {k: v * collab_model.confidence for k, v in raw.items()}
+
     if not known and not req.seed_genres and not weights:
         raise HTTPException(
             status_code=400,
@@ -570,6 +605,7 @@ def recommend(
         genre_weight=req.genre_weight,
         weights=weights,
         exclude_ids=suppress,
+        collab_scores=collab_scores,
     )
     return {
         "count": len(results),
@@ -578,4 +614,12 @@ def recommend(
         "personalized": bool(weights),
         "library_signals": len(weights),
         "suppressed": len(suppress),
+        # Surfaced so the effect of collaborative filtering is inspectable
+        # rather than a silent nudge in the ranking.
+        "collaborative": {
+            "applied": bool(collab_scores),
+            "contributing_users": collab_model.users,
+            "confidence": round(collab_model.confidence, 3),
+            "min_users": collab.MIN_USERS,
+        },
     }
