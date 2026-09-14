@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Auth from "./Auth";
+import Credits from "./Credits";
 import Library from "./Library";
 import MatchFeedback from "./MatchFeedback";
 import LibraryControls from "./LibraryControls";
@@ -437,6 +438,7 @@ export default function App() {
         </section>
         </>
         )}
+        <Credits />
       </div>
     </>
   );

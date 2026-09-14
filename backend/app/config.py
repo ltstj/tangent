@@ -14,6 +14,26 @@ class Settings(BaseSettings):
 
     app_env: str = "dev"
 
+    # Browser origins allowed to call this API, comma-separated. The permissive
+    # "*" that was here is fine on a laptop and wrong facing the internet: it
+    # lets any site issue credentialed requests on a visitor's behalf.
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    # Per-IP, per-minute caps on the endpoints that spend third-party quota.
+    # Google Books allows 1,000 requests/day and IsThereAnyDeal rate-limits
+    # aggressively enough to trip during ordinary testing, so an open instance
+    # can burn someone else's budget in minutes.
+    rate_limit_search_per_min: int = 30
+    rate_limit_offers_per_min: int = 30
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.lower() not in ("dev", "development", "local", "test")
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
     # Data sources
     tmdb_api_key: str = ""
     igdb_client_id: str = ""

@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import subscriptions
-from . import collab, taste
+from . import collab, ratelimit, taste
 from .auth import User, current_user, optional_user
 from .availability import availability_for
 from .config import settings
@@ -38,10 +38,31 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Tangent API", version="0.1.0", lifespan=lifespan)
 
-# Dev-friendly CORS so the Vite frontend can call the API locally.
+# CORS is restricted to configured origins. It used to be "*", which is
+# harmless on a laptop and wrong in public: with credentials in play it lets any
+# website issue requests as a signed-in visitor. Set CORS_ORIGINS for deploys.
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+if settings.is_production and any("localhost" in o for o in settings.allowed_origins):
+    # Loud, but not fatal: a deploy still serving localhost origins is almost
+    # certainly a forgotten env var, and silently failing CORS in a browser is a
+    # miserable thing to debug.
+    import warnings
+
+    warnings.warn(
+        "APP_ENV looks like production but CORS_ORIGINS still allows localhost. "
+        "Set CORS_ORIGINS to the deployed frontend's origin.",
+        stacklevel=1,
+    )
+
+_search_limit = ratelimit.limit("search", lambda: settings.rate_limit_search_per_min)
+_offers_limit = ratelimit.limit("offers", lambda: settings.rate_limit_offers_per_min)
 
 store = CatalogStore()
 _model: TasteModel | None = None
@@ -324,7 +345,8 @@ def _live_search(q: str, medium: Medium | None, limit: int) -> list[CatalogItem]
     return live
 
 
-@app.get("/api/search", response_model=list[CatalogItem])
+@app.get("/api/search", response_model=list[CatalogItem],
+         dependencies=[Depends(_search_limit)])
 def search(
     q: str = Query(..., min_length=1),
     medium: Medium | None = None,
@@ -356,7 +378,7 @@ def get_item(item_id: str) -> CatalogItem:
     return item
 
 
-@app.get("/api/offers/{item_id:path}")
+@app.get("/api/offers/{item_id:path}", dependencies=[Depends(_offers_limit)])
 def offers(
     item_id: str,
     limit: int = Query(6, ge=1, le=20),

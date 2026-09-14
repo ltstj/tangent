@@ -1,7 +1,22 @@
 // Tiny typed client for the Tangent API.
 import { accessToken } from "./supabase";
 
-const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+/**
+ * Where the API lives.
+ *
+ * The localhost fallback is a development convenience only. A production build
+ * that inherited it would have every visitor's browser calling *their own*
+ * machine on port 8000, which fails in a way that looks like the API is broken
+ * rather than unconfigured — so a production build without VITE_API_BASE fails
+ * loudly here instead.
+ */
+const configuredBase = import.meta.env.VITE_API_BASE;
+if (import.meta.env.PROD && !configuredBase) {
+  throw new Error(
+    "VITE_API_BASE is not set. A production build needs the deployed API's URL.",
+  );
+}
+const BASE = configuredBase ?? "http://localhost:8000";
 
 /**
  * Attach the signed-in user's token when there is one.
