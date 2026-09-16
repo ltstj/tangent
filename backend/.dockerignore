@@ -1,0 +1,13 @@
+# Keep the build context small and secrets out of the image entirely.
+.env
+.env.*
+.venv/
+data/
+tests/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+requirements-dev.txt
+requirements-embed.txt

@@ -1,15 +1,20 @@
+# Runtime dependencies for the API. Deliberately excludes the embedding stack:
+# app/embed.py imports sentence_transformers inside a lazily-called function and
+# the API never calls it, so shipping torch would add ~590 MB to the image for
+# code that never runs. See requirements-embed.txt.
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
 httpx==0.28.1
 numpy==2.2.1
-# Phase 2: Supabase Postgres catalog (pgvector). psycopg-pool hands each
-# threadpooled request its own connection instead of serializing on one.
+
+# Supabase Postgres catalog (pgvector). psycopg-pool hands each threadpooled
+# request its own connection instead of serializing on one.
 psycopg[binary]==3.3.5
 psycopg-pool==3.3.1
-# Phase 2: local synopsis embeddings (all-MiniLM-L6-v2, 384-dim).
-# sentence-transformers pulls torch, so first install is large and slow.
-sentence-transformers==6.0.1
 pgvector==0.5.0
 
+# Verifying Supabase access tokens. ES256, so the crypto extra is required -
+# without it every signed-in request fails at import time.
+pyjwt[crypto]==2.13.0

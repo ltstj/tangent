@@ -1,0 +1,7 @@
+# Only needed to *compute* embeddings: python -m scripts.build_embeddings
+#
+# Kept out of requirements.txt because it pulls torch (~590 MB) that the running
+# API never touches - app/embed.py imports it inside a lazily-called function.
+# Install alongside the runtime requirements when you need to embed:
+#     pip install -r requirements.txt -r requirements-embed.txt
+sentence-transformers==6.0.1
