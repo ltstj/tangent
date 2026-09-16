@@ -304,11 +304,12 @@ select:focus { outline: none; border-color: #4f7cff; }
 .credits a { color: #7d8da6; text-decoration: none; }
 .credits a:hover { color: #8fb4ff; text-decoration: underline; }
 .credits-sources {
-  max-width: 34rem;
-  margin: 0.3rem auto 0;
-  /* The block was centred but its wrapped lines were not - `margin: auto`
-     centres the box, not the text inside it. */
-  text-align: center;
-  /* Even line lengths rather than a long first line and a two-word orphan. */
+  /* No max-width and no auto margins on purpose. A constrained, auto-centred
+     box *should* share its centre with the unconstrained line above it, and on
+     paper it does - but it rendered visibly left of that line. Letting this
+     paragraph span the same content box as its sibling means both inherit the
+     one text-align and cannot disagree about where the middle is.
+     text-wrap: balance still keeps the line lengths even. */
+  margin-top: 0.3rem;
   text-wrap: balance;
 }
