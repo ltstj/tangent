@@ -289,8 +289,26 @@ select:focus { outline: none; border-color: #4f7cff; }
 .mfb-note { font-size: 0.68rem; color: #6b7c96; }
 
 /* --- Credits --- */
-.credits { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #1c2540; text-align: center; }
+.credits {
+  margin-top: 3rem;
+  padding: 1rem 1rem 0.6rem;
+  border-top: 1px solid #1c2540;
+  text-align: center;
+  /* Readable over the poster wall: the credits are small, low-contrast text
+     sitting directly on cover art, which the page veil alone does not fix. */
+  background: rgba(11, 15, 24, 0.55);
+  backdrop-filter: blur(4px);
+  border-radius: 12px;
+}
 .credits p { margin: 0.3rem 0; font-size: 0.7rem; color: #5f6f88; line-height: 1.6; }
 .credits a { color: #7d8da6; text-decoration: none; }
 .credits a:hover { color: #8fb4ff; text-decoration: underline; }
-.credits-sources { max-width: 40rem; margin: 0.3rem auto 0; }
+.credits-sources {
+  max-width: 34rem;
+  margin: 0.3rem auto 0;
+  /* The block was centred but its wrapped lines were not - `margin: auto`
+     centres the box, not the text inside it. */
+  text-align: center;
+  /* Even line lengths rather than a long first line and a two-word orphan. */
+  text-wrap: balance;
+}
