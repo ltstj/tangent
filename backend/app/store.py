@@ -83,18 +83,38 @@ class CatalogStore:
         # pool would dial Postgres just for `import app.main` - which would make
         # the offline test suite hit the real database.
         self._pool = ConnectionPool(
-            self.dsn, min_size=1, max_size=5, timeout=15, open=False,
+            self.dsn,
+            # min_size=0 because the host suspends. Fly freezes the machine
+            # after about a minute idle and resumes it on the next request; a
+            # pooled socket does not survive that, so keeping one warm only
+            # guarantees the first request after a resume inherits a dead
+            # connection. Observed in production: /api/search raised
+            # PoolTimeout after 15s on the first database request following a
+            # resume, while /api/genres - which reads the in-memory model -
+            # answered instantly, and every request after it succeeded.
+            min_size=0,
+            max_size=5,
+            # Close idle connections faster than the host suspends, so there is
+            # usually nothing stale to inherit in the first place.
+            max_idle=30.0,
+            # Recycle rather than trust indefinitely; Supabase's pooler closes
+            # connections on its own schedule too.
+            max_lifetime=600.0,
+            # Was 15s, which the post-resume reconnect could exhaust on its own.
+            # A first request that waits three seconds is fine; one that fails is
+            # not, and this is the only place that cost is paid.
+            timeout=30,
+            open=False,
             kwargs={"row_factory": dict_row},
             # pgvector's type has to be registered per connection, or the
             # `embedding` column comes back as a string and writes fail.
             configure=register_vector,
             # Test a connection before handing it out. Without this, a
             # connection dropped while idle - Supabase timing it out, a network
-            # blip, an OS memory event - is served to whichever request asks
-            # next, which fails with a 500 before the pool notices and replaces
-            # it. Observed exactly that on 2026-09-06. Costs one round-trip per
-            # checkout, a few ms against the ~250ms a cross-network query
-            # already takes.
+            # blip, a suspend - is served to whichever request asks next, which
+            # fails with a 500 before the pool notices and replaces it. Observed
+            # on 2026-09-06. Costs one round-trip per checkout, a few ms against
+            # the ~250ms a cross-network query already takes.
             check=ConnectionPool.check_connection,
         )
         self._opened = False
