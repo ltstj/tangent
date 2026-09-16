@@ -1,0 +1,12 @@
+# Cloudflare Pages response headers.
+#
+# Content-Security-Policy is deliberately absent: it would be the most valuable
+# header here, but it has to enumerate Supabase, the API origin and the image
+# CDNs (TMDB, IGDB, Open Library covers), and getting it wrong silently breaks
+# the app in ways that are hard to see. Worth adding once the deployed origins
+# are known and it can be tested against the real site.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), camera=(), microphone=()

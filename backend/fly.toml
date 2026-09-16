@@ -1,0 +1,41 @@
+# Fly.io deployment for the Tangent API.
+#
+# Region is iad (Ashburn) to sit next to the Supabase project in us-east-1.
+# Every request touches Postgres, so a cross-continent hop here would show up
+# directly in response times - the pooler round-trip is already ~200ms.
+
+app = 'tangent-api'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  APP_ENV = 'production'
+  PORT = '8000'
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # 'suspend' rather than 'stop': resuming a suspended machine takes well under
+  # a second, where a cold boot takes several. Set min_machines_running = 1 to
+  # remove even that, at the cost of paying for an always-on machine.
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  # The API holds the catalog and its embeddings in memory: 619 items at 384
+  # dimensions is about 1 MB, and the container measured well under 200 MB in
+  # testing. 512 MB leaves comfortable headroom. The embedding *stack* is not
+  # installed here at all, which is what keeps this small.
+  size = 'shared-cpu-1x'
+  memory = '512mb'
