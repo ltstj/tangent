@@ -3,6 +3,31 @@
 Two pieces: the API on **Fly.io** and the static frontend on **Cloudflare Pages**.
 The database is already Supabase and does not move.
 
+**Live:**
+
+| | |
+|---|---|
+| API | https://tangent-api.fly.dev |
+| Site | https://tangent-9h0.pages.dev |
+
+## Things that actually went wrong the first time
+
+Recording these because each cost a build cycle and none was obvious from
+the dashboard:
+
+- **The build command field is literal.** Entering `run npm build` instead of
+  `npm run build` fails with `/bin/sh: 1: run: not found` and exit code 127.
+- **Root directory must be `frontend`.** Without it the build runs at the repo
+  root and fails with `ENOENT ... /opt/buildhome/repo/package.json`, because
+  there is no package.json there. Note that `Using v2 root directory strategy`
+  appears in the log whether or not the field is set, so it is not confirmation.
+- **Pages bakes variables in at build time.** Adding the three `VITE_*`
+  variables does nothing to an existing deployment - you must trigger a new
+  build afterwards, either from the `⋯` menu on a deployment or by pushing.
+  If the bundle filename under `/assets/` has not changed, no new build ran.
+- **Creating the project under "Workers" rather than "Pages"** produces a
+  Worker that expects a wrangler config. The Pages flow needs no config file.
+
 Nothing here is automated, because each step needs an account only you can create.
 The config files are committed and tested; these are the buttons.
 
